@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>P66-Tuner UI</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>P66-Tuner</h1>
+      <p>16184737 BNFM P66 PCM Log Analyzer + Master Auto Tuner (Preview UI)</p>
+    </header>
+
+    <main class="container">
+      <section class="card grid-span-2">
+        <h2>1) Load Definition Files</h2>
+        <p class="muted">Upload or drop your core definition files to start a session.</p>
+
+        <div class="drop-grid">
+          <label class="dropzone" for="xdf-input">
+            <span>XDF Definition</span>
+            <small>.xdf</small>
+            <input id="xdf-input" type="file" accept=".xdf,.txt,.xml" />
+          </label>
+
+          <label class="dropzone" for="ads-input">
+            <span>ADS Definition</span>
+            <small>.ads</small>
+            <input id="ads-input" type="file" accept=".ads,.txt" />
+          </label>
+
+          <label class="dropzone" for="log-input">
+            <span>Log File</span>
+            <small>.csv / .tsv</small>
+            <input id="log-input" type="file" accept=".csv,.tsv,.txt" />
+          </label>
+        </div>
+
+        <div class="file-summary" id="file-summary">
+          <p>No files selected yet.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>2) Session Setup</h2>
+        <label>
+          Service Number
+          <input id="service-number" placeholder="16184737" />
+        </label>
+        <label>
+          Broadcast / OS
+          <input id="os-code" placeholder="BNFM" />
+        </label>
+        <label>
+          Confidence Mode
+          <select id="mode">
+            <option value="conservative" selected>Conservative</option>
+            <option value="balanced">Balanced</option>
+            <option value="aggressive">Aggressive</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>3) Quick Actions</h2>
+        <div class="actions">
+          <button id="validate-btn">Validate Inputs</button>
+          <button id="analyze-btn">Analyze Log</button>
+          <button id="tune-btn">Generate Tune Suggestions</button>
+        </div>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>Channel Mapping Preview</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Canonical Signal</th>
+              <th>Detected Channel</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="mapping-table"></tbody>
+        </table>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>Output Console</h2>
+        <pre id="console">Ready. Load files and run validation.</pre>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
