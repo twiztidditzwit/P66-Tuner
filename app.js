@@ -1,121 +1,270 @@
-const fileInputs = {
-  xdf: document.getElementById('xdf-input'),
-  ads: document.getElementById('ads-input'),
-  log: document.getElementById('log-input'),
-};
+/* P66-Tuner UI wiring
+ * Connects file inputs to the P66 engine (parser -> mapper -> analyzer -> tuner).
+ */
+(function () {
+  'use strict';
 
-const fileSummary = document.getElementById('file-summary');
-const consoleOutput = document.getElementById('console');
-const mappingTable = document.getElementById('mapping-table');
-
-const canonicalSignals = [
-  'RPM',
-  'MAP',
-  'MAF',
-  'STFT',
-  'LTFT',
-  'KR',
-  'Commanded AFR/Lambda',
-  'Wideband AFR/Lambda',
-];
-
-let files = { xdf: null, ads: null, log: null };
-
-function writeConsole(message) {
-  const ts = new Date().toLocaleTimeString();
-  consoleOutput.textContent = `[${ts}] ${message}\n${consoleOutput.textContent}`;
-}
-
-function fileLabel(file) {
-  if (!file) return 'not loaded';
-  return `${file.name} (${Math.round(file.size / 1024)} KB)`;
-}
-
-function refreshSummary() {
-  fileSummary.innerHTML = `
-    <ul>
-      <li><strong>XDF:</strong> ${fileLabel(files.xdf)}</li>
-      <li><strong>ADS:</strong> ${fileLabel(files.ads)}</li>
-      <li><strong>LOG:</strong> ${fileLabel(files.log)}</li>
-    </ul>
-  `;
-}
-
-function guessChannel(signal, logName, adsName) {
-  const n = `${logName || ''} ${adsName || ''}`.toLowerCase();
-  const checks = {
-    RPM: ['rpm', 'engine speed'],
-    MAP: ['map', 'manifold'],
-    MAF: ['maf', 'airflow'],
-    STFT: ['stft', 'short fuel'],
-    LTFT: ['ltft', 'long fuel'],
-    KR: ['kr', 'knock retard'],
-    'Commanded AFR/Lambda': ['commanded', 'eq ratio', 'desired afr'],
-    'Wideband AFR/Lambda': ['wideband', 'afr', 'lambda'],
+  var fileInputs = {
+    xdf: document.getElementById('xdf-input'),
+    ads: document.getElementById('ads-input'),
+    log: document.getElementById('log-input'),
   };
 
-  const matched = (checks[signal] || []).some((term) => n.includes(term));
-  if (matched) return { channel: 'Auto-detected candidate', status: 'Likely', cls: 'status-ok' };
-  return { channel: 'No clear hint yet', status: 'Needs mapping', cls: 'status-warn' };
-}
+  var fileSummary = document.getElementById('file-summary');
+  var consoleOutput = document.getElementById('console');
+  var mappingTable = document.getElementById('mapping-table');
+  var analysisResults = document.getElementById('analysis-results');
+  var tuneResults = document.getElementById('tune-results');
+  var modeSelect = document.getElementById('mode');
 
-function renderMappingPreview() {
-  const logName = files.log?.name;
-  const adsName = files.ads?.name;
+  var CANONICAL_LABELS = {
+    RPM: 'RPM', MAP: 'MAP', MAF: 'MAF', TPS: 'TPS',
+    STFT: 'STFT', STFT_B1: 'STFT Bank 1', STFT_B2: 'STFT Bank 2',
+    LTFT: 'LTFT', LTFT_B1: 'LTFT Bank 1', LTFT_B2: 'LTFT Bank 2',
+    KR: 'Knock Retard', IAT: 'IAT', ECT: 'ECT',
+    CMD_LAMBDA: 'Commanded AFR/Lambda', WB_LAMBDA: 'Wideband AFR/Lambda',
+    SPARK_ADV: 'Spark Advance', INJ_PW: 'Injector PW',
+    VSS: 'Vehicle Speed', BARO: 'Baro'
+  };
 
-  mappingTable.innerHTML = canonicalSignals
-    .map((signal) => {
-      const result = guessChannel(signal, logName, adsName);
-      return `<tr>
-        <td>${signal}</td>
-        <td>${result.channel}</td>
-        <td class="${result.cls}">${result.status}</td>
-      </tr>`;
-    })
-    .join('');
-}
+  // Session state
+  var files = { xdf: null, ads: null, log: null };
+  var parsedLog = null;
+  var mapResult = null;
+  var sessionReport = null;
 
-Object.entries(fileInputs).forEach(([key, input]) => {
-  input.addEventListener('change', () => {
-    files[key] = input.files[0] || null;
-    refreshSummary();
-    renderMappingPreview();
-    if (files[key]) {
-      writeConsole(`${key.toUpperCase()} file loaded: ${files[key].name}`);
+  function writeConsole(message) {
+    var ts = new Date().toLocaleTimeString();
+    consoleOutput.textContent = '[' + ts + '] ' + message + '\n' + consoleOutput.textContent;
+  }
+
+  function fileLabel(file) {
+    if (!file) return 'not loaded';
+    return file.name + ' (' + Math.round(file.size / 1024) + ' KB)';
+  }
+
+  function refreshSummary() {
+    fileSummary.innerHTML =
+      '<ul>' +
+      '<li><strong>XDF:</strong> ' + fileLabel(files.xdf) + '</li>' +
+      '<li><strong>ADS:</strong> ' + fileLabel(files.ads) + '</li>' +
+      '<li><strong>LOG:</strong> ' + fileLabel(files.log) +
+      (parsedLog ? ' — ' + parsedLog.rowCount + ' rows parsed' : '') + '</li>' +
+      '</ul>';
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function renderMappingPreview() {
+    if (!mapResult) {
+      // Fallback: show canonical list awaiting a log.
+      mappingTable.innerHTML = Object.keys(CANONICAL_LABELS).map(function (sig) {
+        return '<tr><td>' + esc(CANONICAL_LABELS[sig]) + '</td>' +
+          '<td class="muted">load a log to map</td>' +
+          '<td class="status-warn">Pending</td></tr>';
+      }).join('');
+      return;
+    }
+    mappingTable.innerHTML = Object.keys(CANONICAL_LABELS).map(function (sig) {
+      var m = mapResult.mapping[sig];
+      if (m) {
+        var cls = m.confidence === 'high' ? 'status-ok' : 'status-warn';
+        var label = m.confidence === 'high' ? 'High' : 'Medium';
+        return '<tr><td>' + esc(CANONICAL_LABELS[sig]) + '</td>' +
+          '<td>' + esc(m.column) + '</td>' +
+          '<td class="' + cls + '">' + label + '</td></tr>';
+      }
+      return '<tr><td>' + esc(CANONICAL_LABELS[sig]) + '</td>' +
+        '<td class="muted">—</td><td class="status-bad">Missing</td></tr>';
+    }).join('');
+  }
+
+  function readLogFile(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(reader.error); };
+      reader.readAsText(file);
+    });
+  }
+
+  Object.entries(fileInputs).forEach(function (entry) {
+    var key = entry[0], input = entry[1];
+    input.addEventListener('change', function () {
+      files[key] = input.files[0] || null;
+      if (key === 'log' && files.log) {
+        readLogFile(files.log).then(function (text) {
+          parsedLog = P66.parseLogText(text);
+          mapResult = P66.mapChannels(parsedLog.headers);
+          sessionReport = null; // invalidate previous analysis
+          analysisResults.innerHTML = '<p class="muted">Log reloaded — run analysis again.</p>';
+          tuneResults.innerHTML = '<p class="muted">Generate tune suggestions after analysis.</p>';
+          refreshSummary();
+          renderMappingPreview();
+          writeConsole('LOG parsed: ' + parsedLog.rowCount + ' rows, ' +
+            parsedLog.columnCount + ' columns (delimiter: ' +
+            (parsedLog.delimiter === '\t' ? 'TAB' : parsedLog.delimiter) + ').');
+          parsedLog.warnings.forEach(writeConsole);
+          var mapped = Object.keys(mapResult.mapping).length;
+          writeConsole('Channel mapping: ' + mapped + ' signals mapped, ' +
+            mapResult.unmapped.length + ' columns unmapped.');
+        }).catch(function (err) {
+          writeConsole('Failed to read log file: ' + err);
+        });
+      } else {
+        if (key === 'log') { parsedLog = null; mapResult = null; sessionReport = null; }
+        refreshSummary();
+        renderMappingPreview();
+      }
+      if (files[key]) writeConsole(key.toUpperCase() + ' file loaded: ' + files[key].name);
+    });
+  });
+
+  document.getElementById('validate-btn').addEventListener('click', function () {
+    var missing = ['xdf', 'ads'].filter(function (k) { return !files[k]; });
+    if (missing.length) {
+      writeConsole('Validation warning: missing ' + missing.join(', ').toUpperCase() + ' file(s). Log-only analysis still available.');
+    } else {
+      writeConsole('Validation passed: XDF and ADS loaded.');
+    }
+    if (!parsedLog) {
+      writeConsole('No log parsed yet — load a CSV/TSV log to enable analysis.');
+      return;
+    }
+    var required = ['RPM', 'MAP'];
+    var absent = required.filter(function (s) { return !mapResult.mapping[s]; });
+    if (absent.length) {
+      writeConsole('Validation warning: log is missing key channels: ' + absent.join(', ') + '.');
+    } else {
+      writeConsole('Log channels OK: RPM, MAP present. ' +
+        Object.keys(mapResult.mapping).length + ' signals mapped.');
     }
   });
-});
 
-function missingRequired() {
-  const required = ['xdf', 'ads'];
-  return required.filter((k) => !files[k]);
-}
+  function renderAnalysis(report) {
+    var dist = report.regionDistribution;
+    var total = report.rowCount || 1;
+    function pct(n) { return Math.round((100 * n) / total) + '%'; }
 
-document.getElementById('validate-btn').addEventListener('click', () => {
-  const missing = missingRequired();
-  if (missing.length) {
-    writeConsole(`Validation warning: missing ${missing.join(', ').toUpperCase()} file(s).`);
-    return;
+    var html = '<p><strong>' + report.rowCount + '</strong> rows analyzed.</p>';
+    html += '<table><thead><tr><th>Region</th><th>Samples</th><th>Share</th></tr></thead><tbody>';
+    P66.REGIONS.forEach(function (r) {
+      html += '<tr><td>' + r + '</td><td>' + (dist[r] || 0) + '</td><td>' + pct(dist[r] || 0) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+
+    if (report.missingChannels.length) {
+      html += '<p class="status-warn">Missing channels: ' + esc(report.missingChannels.join(', ')) +
+        ' — region classification degraded.</p>';
+    }
+
+    // Fuel trims
+    var ft = report.fuelTrims;
+    html += '<h3>Fuel Trim Bias (top cells)</h3>';
+    if (ft.available && ft.cells.length) {
+      html += '<p class="muted">Overall avg |trim|: ' + ft.overallAvgAbsTrim + '% across ' +
+        ft.totalSamples + ' samples, ' + ft.cellCount + ' cells.</p>';
+      html += '<table><thead><tr><th>RPM</th><th>MAP kPa</th><th>Avg Trim %</th><th>Samples</th></tr></thead><tbody>';
+      ft.cells.slice(0, 8).forEach(function (c) {
+        var cls = Math.abs(c.avgTrim) >= 5 ? 'status-bad' : (Math.abs(c.avgTrim) >= 3 ? 'status-warn' : 'status-ok');
+        html += '<tr><td>' + esc(c.rpmBin) + '</td><td>' + esc(c.mapBin) + '</td>' +
+          '<td class="' + cls + '">' + (c.avgTrim > 0 ? '+' : '') + c.avgTrim + '</td>' +
+          '<td>' + c.samples + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<p class="muted">' + esc(ft.reason || 'No fuel trim data.') + '</p>';
+    }
+
+    // Knock
+    var k = report.knock;
+    html += '<h3>Knock</h3>';
+    if (k.available) {
+      var kcls = k.knockSamples === 0 ? 'status-ok' : (k.maxKR >= 4 ? 'status-bad' : 'status-warn');
+      html += '<p class="' + kcls + '">' + k.knockSamples + ' knock samples (' + k.knockPct +
+        '%), max KR ' + k.maxKR + '°, avg when active ' + k.avgKRWhenActive + '°.</p>';
+    } else {
+      html += '<p class="muted">' + esc(k.reason || 'No knock data.') + '</p>';
+    }
+
+    // Lambda
+    var l = report.lambda;
+    html += '<h3>Commanded vs Wideband Lambda</h3>';
+    if (l.available) {
+      var lcls = l.meanAbsError <= 0.03 ? 'status-ok' : 'status-warn';
+      html += '<p class="' + lcls + '">Mean abs error ' + l.meanAbsError + ' λ, ' +
+        l.pctWithin3Pct + '% within ±0.03 λ (' + l.samples + ' samples).</p>';
+    } else {
+      html += '<p class="muted">' + esc(l.reason || 'No lambda data.') + '</p>';
+    }
+
+    analysisResults.innerHTML = html;
   }
-  writeConsole('Validation passed: XDF and ADS loaded. Ready for analysis.');
-});
 
-document.getElementById('analyze-btn').addEventListener('click', () => {
-  if (!files.log) {
-    writeConsole('Analyze blocked: load a log file first.');
-    return;
+  document.getElementById('analyze-btn').addEventListener('click', function () {
+    if (!parsedLog || !mapResult) {
+      writeConsole('Analyze blocked: load a log file first.');
+      return;
+    }
+    try {
+      sessionReport = P66.analyzeSession(parsedLog, mapResult);
+      renderAnalysis(sessionReport);
+      writeConsole('Analysis complete: ' + sessionReport.rowCount + ' rows, ' +
+        Object.keys(sessionReport.regionDistribution).length + ' regions classified.');
+    } catch (err) {
+      writeConsole('Analysis failed: ' + (err && err.message ? err.message : err));
+    }
+  });
+
+  function renderTune(result) {
+    var html = '<p><strong>' + esc(result.summary) + '</strong></p>';
+    if (result.actionable.length) {
+      html += '<h3>Actionable</h3><table><thead><tr><th>Table</th><th>Cell</th><th>Action</th><th>Detail</th><th>Confidence</th></tr></thead><tbody>';
+      result.actionable.forEach(function (s) {
+        var detail = s.deltaPct !== undefined && s.deltaPct !== 0
+          ? (s.deltaPct > 0 ? '+' : '') + s.deltaPct + '%'
+          : (s.deltaDeg !== undefined ? s.deltaDeg + '°' : '—');
+        var cls = s.confidence === 'high' ? 'status-ok' : 'status-warn';
+        html += '<tr><td>' + esc(s.table) + '</td><td>' + esc(s.cell) + '</td>' +
+          '<td>' + esc(s.action) + '</td><td>' + esc(detail) + '</td>' +
+          '<td class="' + cls + '">' + esc(s.confidence) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<h3>Why</h3><ul>';
+      result.actionable.forEach(function (s) {
+        html += '<li><strong>' + esc(s.table) + ' / ' + esc(s.cell) + ':</strong> ' + esc(s.reason) + '</li>';
+      });
+      html += '</ul>';
+    }
+    if (result.blocked.length) {
+      html += '<h3>Held by safety gates</h3><ul>';
+      result.blocked.forEach(function (s) {
+        html += '<li><strong>' + esc(s.table) + ' / ' + esc(s.cell) + ':</strong> ' + esc(s.reason) + '</li>';
+      });
+      html += '</ul>';
+    }
+    html += '<p class="status-warn"><strong>Review every suggestion manually before flashing. ' +
+      'Re-log after applying changes and iterate.</strong></p>';
+    tuneResults.innerHTML = html;
   }
-  writeConsole('Analysis run complete (UI preview): generated baseline error-map placeholders.');
-});
 
-document.getElementById('tune-btn').addEventListener('click', () => {
-  const missing = missingRequired();
-  if (missing.length) {
-    writeConsole('Auto-tune blocked: load XDF + ADS first.');
-    return;
-  }
-  writeConsole('Generated conservative tune suggestion set (preview mode). Review manually before use.');
-});
+  document.getElementById('tune-btn').addEventListener('click', function () {
+    if (!sessionReport) {
+      writeConsole('Tune blocked: run analysis first.');
+      return;
+    }
+    var mode = modeSelect ? modeSelect.value : 'conservative';
+    try {
+      var result = P66.generateSuggestions(sessionReport, mode);
+      renderTune(result);
+      writeConsole('Tune suggestions generated (' + mode + ' mode): ' + result.summary);
+    } catch (err) {
+      writeConsole('Tune generation failed: ' + (err && err.message ? err.message : err));
+    }
+  });
 
-refreshSummary();
-renderMappingPreview();
+  refreshSummary();
+  renderMappingPreview();
+})();

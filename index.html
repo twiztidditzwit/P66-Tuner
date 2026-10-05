@@ -86,11 +86,29 @@
       </section>
 
       <section class="card grid-span-2">
+        <h2>Analysis Results</h2>
+        <div id="analysis-results">
+          <p class="muted">Run analysis on a loaded log to see region breakdown and error metrics.</p>
+        </div>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>Tune Suggestions</h2>
+        <div id="tune-results">
+          <p class="muted">Generate tune suggestions after analysis. Review every suggestion manually before flashing.</p>
+        </div>
+      </section>
+
+      <section class="card grid-span-2">
         <h2>Output Console</h2>
         <pre id="console">Ready. Load files and run validation.</pre>
       </section>
     </main>
 
+    <script src="js/log-parser.js"></script>
+    <script src="js/channel-mapper.js"></script>
+    <script src="js/analyzer.js"></script>
+    <script src="js/tuner.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
