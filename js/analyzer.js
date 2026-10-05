@@ -16,6 +16,17 @@
     return (typeof v === 'number' && isFinite(v)) ? v : null;
   }
 
+  // Sample up to N numeric values from a column for style detection.
+  function sampleColumn(rows, col, max) {
+    max = max || 500;
+    var out = [];
+    for (var i = 0; i < rows.length && out.length < max; i++) {
+      var v = num(rows[i][col]);
+      if (v !== null) out.push(v);
+    }
+    return out;
+  }
+
   /**
    * Assign an operating region to each row. Mutates rows by adding _region.
    * Needs RPM; TPS preferred, MAP as fallback for load detection.
@@ -69,26 +80,36 @@
 
   /**
    * Fuel trim bias per RPM x MAP cell.
-   * Combined trim = STFT + LTFT (percent). Positive = lean, ECU adding fuel.
+   * Combined trim = STFT + LTFT (percent), averaged across banks.
+   * Trim channels are auto-normalized (percent / multiplier / GM 128-count).
    */
   function analyzeFuelTrims(rows, mapResult) {
-    var trims = P66.fuelTrimColumns(mapResult);
+    var banks = P66.fuelTrimBanks(mapResult);
     var rpmCol = P66.columnFor(mapResult, 'RPM');
     var mapCol = P66.columnFor(mapResult, 'MAP');
-    if ((!trims.stft && !trims.ltft) || !rpmCol || !mapCol) {
+    if (!banks.length || !rpmCol || !mapCol) {
       return { available: false, reason: 'Need STFT/LTFT, RPM and MAP channels.' };
     }
+    // Detect each trim column's encoding once.
+    var styles = banks.map(function (b) {
+      return {
+        stft: b.stft ? P66.detectTrimStyle(sampleColumn(rows, b.stft)) : 'percent',
+        ltft: b.ltft ? P66.detectTrimStyle(sampleColumn(rows, b.ltft)) : 'percent'
+      };
+    });
     var cells = {}; // "rpmBin|mapBin" -> { count, sum, sumSq }
     var totalAbs = 0, totalN = 0;
     rows.forEach(function (row) {
       var rpm = num(row[rpmCol]);
       var map = num(row[mapCol]);
       if (rpm === null || map === null) return;
-      var stft = trims.stft ? num(row[trims.stft]) : 0;
-      var ltft = trims.ltft ? num(row[trims.ltft]) : 0;
-      if (stft === null) stft = 0;
-      if (ltft === null) ltft = 0;
-      var combined = stft + ltft;
+      var bankTrims = [];
+      banks.forEach(function (b, bi) {
+        var stft = b.stft ? P66.trimToPct(num(row[b.stft]), styles[bi].stft) : 0;
+        var ltft = b.ltft ? P66.trimToPct(num(row[b.ltft]), styles[bi].ltft) : 0;
+        bankTrims.push(stft + ltft);
+      });
+      var combined = bankTrims.reduce(function (a, t) { return a + t; }, 0) / bankTrims.length;
       var key = rpmBin(rpm) + '|' + mapBin(map);
       var c = cells[key] || (cells[key] = { count: 0, sum: 0, sumSq: 0 });
       c.count++; c.sum += combined; c.sumSq += combined * combined;
@@ -118,32 +139,80 @@
 
   /**
    * Knock retard analysis. KR > 0.5 deg counts as active knock.
+   * Consecutive active rows are grouped into events; sizing uses robust
+   * per-event statistics so a single spike can't drive the recommendation.
    */
   function analyzeKnock(rows, mapResult) {
     var krCol = P66.columnFor(mapResult, 'KR');
+    var tpsCol = P66.columnFor(mapResult, 'TPS');
     if (!krCol) return { available: false, reason: 'Need KR (knock retard) channel.' };
-    var active = 0, maxKR = 0, sumKR = 0;
-    var byRegion = {};
-    REGIONS.forEach(function (r) { byRegion[r] = { samples: 0, maxKR: 0 }; });
-    rows.forEach(function (row) {
+
+    // Group consecutive KR-active rows into events.
+    var events = [];
+    var cur = null;
+    rows.forEach(function (row, i) {
       var kr = num(row[krCol]);
-      if (kr === null) return;
-      var region = row._region || 'cruise';
-      if (kr > maxKR) maxKR = kr;
-      if (kr > 0.5) {
-        active++; sumKR += kr;
-        byRegion[region].samples++;
-        if (kr > byRegion[region].maxKR) byRegion[region].maxKR = kr;
+      if (kr !== null && kr > 0.5) {
+        if (!cur) {
+          cur = {
+            startIdx: i, endIdx: i, samples: 0, peakKR: 0, sumKR: 0,
+            regions: {}, tpsStart: tpsCol ? num(row[tpsCol]) : null, tpsEnd: null
+          };
+        }
+        cur.endIdx = i;
+        cur.samples++;
+        cur.sumKR += kr;
+        if (kr > cur.peakKR) cur.peakKR = kr;
+        var region = row._region || 'cruise';
+        cur.regions[region] = (cur.regions[region] || 0) + 1;
+        cur.tpsEnd = tpsCol ? num(row[tpsCol]) : null;
+      } else if (cur) {
+        events.push(cur);
+        cur = null;
       }
     });
+    if (cur) events.push(cur);
+
+    events.forEach(function (e) {
+      // Majority region for the event.
+      var best = 'cruise', bestN = 0;
+      Object.keys(e.regions).forEach(function (r) {
+        if (e.regions[r] > bestN) { bestN = e.regions[r]; best = r; }
+      });
+      e.region = best;
+      e.avgKR = e.sumKR / e.samples;
+      e.tpsDrop = (e.tpsStart !== null && e.tpsEnd !== null) ? e.tpsStart - e.tpsEnd : 0;
+    });
+
+    var active = 0, maxKR = 0, sumKR = 0;
+    var byRegion = {};
+    REGIONS.forEach(function (r) { byRegion[r] = { samples: 0, events: 0, maxKR: 0 }; });
+    events.forEach(function (e) {
+      active += e.samples;
+      sumKR += e.sumKR;
+      if (e.peakKR > maxKR) maxKR = e.peakKR;
+      var br = byRegion[e.region];
+      br.samples += e.samples;
+      br.events++;
+      if (e.peakKR > br.maxKR) br.maxKR = e.peakKR;
+    });
+
     return {
       available: true,
       knockSamples: active,
+      knockEvents: events.length,
       totalSamples: rows.length,
       knockPct: rows.length ? round2(100 * active / rows.length) : 0,
       maxKR: round2(maxKR),
       avgKRWhenActive: active ? round2(sumKR / active) : 0,
-      byRegion: byRegion
+      byRegion: byRegion,
+      events: events.map(function (e) {
+        return {
+          startIdx: e.startIdx, samples: e.samples, region: e.region,
+          peakKR: round2(e.peakKR), avgKR: round2(e.avgKR),
+          tpsDrop: e.tpsDrop === null ? null : round2(e.tpsDrop)
+        };
+      })
     };
   }
 

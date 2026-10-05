@@ -81,7 +81,10 @@
 
   /**
    * Spark suggestions from knock analysis.
-   * Sustained KR in a region -> pull timing there.
+   * Uses per-event statistics: the target region is the non-transient region
+   * with the most knock samples, and the pull is sized from the median event
+   * peak (robust against single-sample spikes). Tip-out knock is flagged as
+   * possible false knock.
    */
   function sparkSuggestions(knockReport, gates) {
     var out = [];
@@ -98,24 +101,41 @@
       }
       return out;
     }
-    // Pull timing proportional to worst observed KR, capped per mode.
-    var pull = round2(clamp(knockReport.maxKR, 0.5, gates.maxSparkDeltaDeg));
-    var worstRegion = null, worstMax = 0;
+    // Target region: most knock samples outside transient (tip-out noise).
+    var targetRegion = null, targetSamples = 0;
     Object.keys(knockReport.byRegion).forEach(function (r) {
-      if (knockReport.byRegion[r].maxKR > worstMax) {
-        worstMax = knockReport.byRegion[r].maxKR;
-        worstRegion = r;
+      if (r === 'transient') return;
+      if (knockReport.byRegion[r].samples > targetSamples) {
+        targetSamples = knockReport.byRegion[r].samples;
+        targetRegion = r;
       }
     });
+    if (!targetRegion) {
+      out.push({
+        kind: 'spark', table: 'Spark Advance', cell: 'global',
+        action: 'none', deltaDeg: 0,
+        reason: 'Knock occurred only during transients — likely false knock from drivetrain noise. No timing change suggested; verify with audio knock detection.',
+        confidence: 'low', samples: knockReport.knockSamples
+      });
+      return out;
+    }
+    var regionEvents = knockReport.events.filter(function (e) { return e.region === targetRegion; });
+    var peaks = regionEvents.map(function (e) { return e.peakKR; }).sort(function (a, b) { return a - b; });
+    var medianPeak = peaks[Math.floor(peaks.length / 2)];
+    var pull = round2(clamp(medianPeak, 0.5, gates.maxSparkDeltaDeg));
+    var tipOut = regionEvents.some(function (e) { return e.tpsDrop !== null && e.tpsDrop > 10; });
+    var singleSpike = regionEvents.length === 1 && regionEvents[0].samples === 1;
     out.push({
-      kind: 'spark', table: 'Spark Advance',
-      cell: worstRegion ? worstRegion + ' region' : 'global',
-      action: 'retard timing', deltaDeg: -pull,
-      reason: knockReport.knockSamples + ' knock samples (' + knockReport.knockPct + '% of log), ' +
-        'max KR ' + knockReport.maxKR + ' deg' +
-        (worstRegion ? ', worst in ' + worstRegion : '') +
-        '. Pull timing, re-log, and confirm KR trends down before further changes.',
-      confidence: knockReport.knockSamples >= gates.minKnockSamples * 2 ? 'high' : 'medium',
+      kind: 'spark', table: 'Spark Advance', cell: targetRegion + ' region',
+      action: singleSpike ? 'none' : 'retard timing',
+      deltaDeg: singleSpike ? 0 : -pull,
+      reason: knockReport.knockEvents + ' knock event(s), ' + knockReport.knockSamples +
+        ' samples (' + knockReport.knockPct + '% of log) in ' + targetRegion +
+        '; median event peak ' + medianPeak + '°, max ' + knockReport.maxKR + '°.' +
+        (singleSpike ? ' Only a single-sample spike — likely noise; no change suggested.' : '') +
+        (tipOut ? ' Largest event coincided with throttle lift — possible false knock; verify before pulling timing.' : '') +
+        (!singleSpike ? ' Pull timing, re-log, and confirm KR trends down.' : ''),
+      confidence: singleSpike ? 'low' : (regionEvents.length >= 2 ? 'high' : 'medium'),
       samples: knockReport.knockSamples
     });
     return out;

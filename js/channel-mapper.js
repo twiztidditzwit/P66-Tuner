@@ -14,18 +14,22 @@
     MAP: ['map', 'manifold absolute pressure', 'manifold pressure', 'map kpa', 'map (kpa)', 'manifold_abs_press'],
     MAF: ['maf', 'mass air flow', 'mass airflow', 'maf g/s', 'maf (g/s)', 'airflow', 'maf lb/min'],
     TPS: ['tps', 'throttle position', 'throttle_position', 'tps %', 'tps (%)', 'throttle %', 'throttlepos'],
-    STFT_B1: ['stft b1', 'stft bank 1', 'stft_1', 'short term fuel trim bank 1', 'stftb1'],
-    STFT_B2: ['stft b2', 'stft bank 2', 'stft_2', 'short term fuel trim bank 2', 'stftb2'],
+    STFT_B1: ['stft b1', 'stft bank 1', 'stft_1', 'short term fuel trim bank 1', 'stftb1',
+              'left/front int', 'left front int', 'lf int'],
+    STFT_B2: ['stft b2', 'stft bank 2', 'stft_2', 'short term fuel trim bank 2', 'stftb2',
+              'right/rear int', 'right rear int', 'rr int'],
     STFT: ['stft', 'short term fuel trim', 'short_term_fuel_trim', 'st fuel trim'],
-    LTFT_B1: ['ltft b1', 'ltft bank 1', 'ltft_1', 'long term fuel trim bank 1', 'ltftb1'],
-    LTFT_B2: ['ltft b2', 'ltft bank 2', 'ltft_2', 'long term fuel trim bank 2', 'ltftb2'],
+    LTFT_B1: ['ltft b1', 'ltft bank 1', 'ltft_1', 'long term fuel trim bank 1', 'ltftb1',
+              'left/front blm', 'left front blm', 'lf blm'],
+    LTFT_B2: ['ltft b2', 'ltft bank 2', 'ltft_2', 'long term fuel trim bank 2', 'ltftb2',
+              'right/rear blm', 'right rear blm', 'rr blm'],
     LTFT: ['ltft', 'long term fuel trim', 'long_term_fuel_trim', 'lt fuel trim'],
     KR: ['kr', 'knock retard', 'knock_retard', 'spark retard', 'knock retard (deg)', 'kr (deg)'],
-    IAT: ['iat', 'intake air temp', 'intake_air_temp', 'iat f', 'iat (f)', 'air temp'],
-    ECT: ['ect', 'coolant temp', 'engine coolant temp', 'coolant_temperature', 'ect f', 'ect (f)'],
+    IAT: ['iat', 'mat', 'manifold air temp', 'intake air temp', 'intake_air_temp', 'iat f', 'iat (f)', 'air temp'],
+    ECT: ['ect', 'coolant', 'coolant temp', 'engine coolant temp', 'coolant_temperature', 'ect f', 'ect (f)'],
     CMD_LAMBDA: ['commanded lambda', 'commanded_lambda', 'commanded afr', 'commanded_afr',
                  'eq ratio', 'equivalence ratio', 'desired afr', 'cmd lambda', 'target lambda',
-                 'commanded eq', 'afr commanded'],
+                 'target afr', 'target air/fuel ratio', 'commanded eq', 'afr commanded'],
     WB_LAMBDA: ['wideband', 'wideband afr', 'wideband_lambda', 'wb afr', 'wbafr', 'wbo2',
                 'wb lambda', 'afr wideband', 'lambda wideband', 'actual afr', 'measured afr', 'afr (wideband)'],
     SPARK_ADV: ['spark advance', 'spark_advance', 'ignition timing', 'timing advance',
@@ -33,7 +37,7 @@
     INJ_PW: ['injector pulse width', 'inj pw', 'injector_pw', 'pulse width', 'ipw',
              'injpw ms', 'fuel pw'],
     VSS: ['vss', 'vehicle speed', 'vehicle_speed', 'mph', 'kph', 'speed'],
-    BARO: ['baro', 'barometric pressure', 'baro kpa', 'barometer']
+    BARO: ['baro', 'barometric', 'barometric pressure', 'baro kpa', 'barometer']
   };
 
   var CANONICAL_ORDER = Object.keys(SIGNAL_ALIASES);
@@ -122,8 +126,49 @@
     };
   }
 
+  /**
+   * Per-bank trim column pairs. Averages across banks when both are present.
+   */
+  function fuelTrimBanks(mapResult) {
+    var banks = [];
+    var b1 = { stft: columnFor(mapResult, 'STFT_B1'), ltft: columnFor(mapResult, 'LTFT_B1') };
+    var b2 = { stft: columnFor(mapResult, 'STFT_B2'), ltft: columnFor(mapResult, 'LTFT_B2') };
+    if (b1.stft || b1.ltft) banks.push(b1);
+    if (b2.stft || b2.ltft) banks.push(b2);
+    if (!banks.length) {
+      var gen = { stft: columnFor(mapResult, 'STFT'), ltft: columnFor(mapResult, 'LTFT') };
+      if (gen.stft || gen.ltft) banks.push(gen);
+    }
+    return banks;
+  }
+
+  /**
+   * Detect a trim channel's encoding from its values:
+   *   'multiplier' — centered near 1.0 (e.g. 0.85..1.15)
+   *   'count128'   — centered near 128 (GM BLM/INT counts)
+   *   'percent'    — centered near 0 (e.g. -25..+25)
+   */
+  function detectTrimStyle(sampleValues) {
+    if (!sampleValues.length) return 'percent';
+    var sorted = sampleValues.slice().sort(function (a, b) { return a - b; });
+    var med = sorted[Math.floor(sorted.length / 2)];
+    if (med > 0.5 && med < 1.5) return 'multiplier';
+    if (med >= 90 && med <= 170) return 'count128';
+    return 'percent';
+  }
+
+  function trimToPct(v, style) {
+    if (v === null || v === undefined) return 0;
+    if (style === 'multiplier') return (v - 1) * 100;
+    if (style === 'count128') return ((v - 128) / 128) * 100;
+    return v;
+  }
+
   P66.SIGNAL_ALIASES = SIGNAL_ALIASES;
   P66.mapChannels = mapChannels;
   P66.columnFor = columnFor;
   P66.fuelTrimColumns = fuelTrimColumns;
+  P66.fuelTrimBanks = fuelTrimBanks;
+  P66.detectTrimStyle = detectTrimStyle;
+  P66.trimToPct = trimToPct;
 })(typeof window !== 'undefined' ? window : global);

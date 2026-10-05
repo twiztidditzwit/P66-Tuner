@@ -66,14 +66,27 @@
     var delimiter = detectDelimiter(text);
     var lines = text.split(/\r?\n/);
     // Drop leading blank lines / comment lines starting with # or ;
-    var startIdx = 0;
-    while (startIdx < lines.length && (lines[startIdx].trim() === '' || /^[#;]/.test(lines[startIdx].trim()))) {
-      startIdx++;
+    var nonBlank = [];
+    for (var li = 0; li < lines.length; li++) {
+      var t = lines[li].trim();
+      if (t === '' || /^[#;]/.test(t)) continue;
+      nonBlank.push(lines[li]);
     }
-    if (startIdx >= lines.length) {
+    if (!nonBlank.length) {
       return { headers: [], rows: [], delimiter: delimiter, rowCount: 0, columnCount: 0, warnings: ['No data lines found'] };
     }
-    var headers = splitLine(lines[startIdx], delimiter);
+    // Header = the first line carrying the most fields. This skips title lines
+    // like TunerPro's "Engine data log recorded on ..." preamble.
+    var headerIdx = 0, headerFields = 0;
+    var scanLimit = Math.min(10, nonBlank.length);
+    for (var s = 0; s < scanLimit; s++) {
+      var fc = splitLine(nonBlank[s], delimiter).length;
+      if (fc > headerFields) { headerFields = fc; headerIdx = s; }
+    }
+    if (headerIdx > 0) {
+      warnings.push('Skipped ' + headerIdx + ' leading title line(s) before the header row.');
+    }
+    var headers = splitLine(nonBlank[headerIdx], delimiter);
     var columnCount = headers.length;
     if (columnCount < 2) {
       warnings.push('Only one column detected — delimiter may be wrong (detected: ' +
@@ -94,15 +107,24 @@
 
     var rows = [];
     var skipped = 0;
-    for (var r = startIdx + 1; r < lines.length; r++) {
-      var line = lines[r];
-      if (line.trim() === '') continue;
+    var skippedNonNumeric = 0;
+    for (var r = headerIdx + 1; r < nonBlank.length; r++) {
+      var line = nonBlank[r];
       var fields = splitLine(line, delimiter);
       if (fields.length !== columnCount) {
         // Tolerate trailing empty fields; otherwise skip the row.
         while (fields.length < columnCount) fields.push('');
         if (fields.length > columnCount) { skipped++; continue; }
       }
+      // Skip non-data rows (e.g. TunerPro's units row): if most fields are
+      // non-numeric text, this isn't a sample.
+      var numericCount = 0, checkCount = 0;
+      for (var f = 0; f < fields.length; f++) {
+        if (fields[f] === '') continue;
+        checkCount++;
+        if (!isNaN(Number(fields[f])) && isFinite(Number(fields[f]))) numericCount++;
+      }
+      if (checkCount > 0 && numericCount / checkCount < 0.5) { skippedNonNumeric++; continue; }
       var obj = {};
       for (var c = 0; c < columnCount; c++) {
         obj[headers[c]] = coerceValue(fields[c]);
@@ -111,6 +133,9 @@
     }
     if (skipped > 0) {
       warnings.push(skipped + ' row(s) skipped due to column mismatch.');
+    }
+    if (skippedNonNumeric > 0) {
+      warnings.push(skippedNonNumeric + ' non-data row(s) skipped (e.g. units row).');
     }
     return {
       headers: headers,
