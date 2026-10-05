@@ -80,12 +80,46 @@ P66-Tuner is intended to help tuners and engineers:
 
 ## Roadmap
 
-- [ ] Build robust log parser and schema mapper.
+- [x] Build robust log parser and schema mapper.
+- [x] Implement confidence-scored VE/MAF correction model.
+- [x] Add spark/knock adaptive tuning assistant.
+- [x] Create UI dashboard for trend inspection and pass comparison.
+- [x] Narrowband O2 analysis (cell bias, cross-count health, WOT richness check).
+- [x] BCC diffing harness (`tools/bcc-diff.js`) for XDF table discovery.
 - [ ] Add configurable rule packs for P66 strategies.
-- [ ] Implement confidence-scored VE/MAF correction model.
-- [ ] Add spark/knock adaptive tuning assistant.
-- [ ] Create UI dashboard for trend inspection and pass comparison.
 - [ ] Add import/export adapters for common tuning tool formats.
+
+## BCC Diffing Harness
+
+`tools/bcc-diff.js` compares binary images for the same service number to find
+calibration data. The six known BCCs for 16184737
+(BHLD, BJPM, BJRM, BKWU, BKWW, BNFM) share identical hardware — every byte that
+differs between two BCC images is a calibration candidate, and identical
+regions are shared code.
+
+```bash
+# Diff BCC images against a reference
+node tools/bcc-diff.js --ref bnfm.bin --cmp bjpm.bin bhld.bin --json diff.json
+
+# Entropy reconnaissance on a single image
+node tools/bcc-diff.js --single bnfm.bin
+```
+
+Regions are classified heuristically (`table-candidate`, `scalar/flag`,
+`code?`) by size and entropy. Feed the region map into XDF development:
+table-candidate addresses are where VE, spark, and PE tables live.
+
+## Narrowband O2 Analysis
+
+For cars without a wideband (the common case on this platform), the analyzer
+uses the factory narrowband O2 sensors (mV):
+
+- per-cell rich/lean bias (RPM × MAP) to corroborate fuel-trim suggestions
+- cross-count rate per bank for sensor health (lazy/dead detection)
+- WOT richness safety check — flags lean-at-WOT immediately
+
+Fuel-trim suggestions automatically gain confidence when the narrowband O2
+agrees with the trim direction, and are flagged for caution when they disagree.
 
 ## Supplying XDF/ADS Files (When Chat Upload Is Blocked)
 

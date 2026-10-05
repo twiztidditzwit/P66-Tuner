@@ -37,7 +37,13 @@
     INJ_PW: ['injector pulse width', 'inj pw', 'injector_pw', 'pulse width', 'ipw',
              'injpw ms', 'fuel pw'],
     VSS: ['vss', 'vehicle speed', 'vehicle_speed', 'mph', 'kph', 'speed'],
-    BARO: ['baro', 'barometric', 'barometric pressure', 'baro kpa', 'barometer']
+    BARO: ['baro', 'barometric', 'barometric pressure', 'baro kpa', 'barometer'],
+    O2_B1: ['o2 b1', 'o2 bank 1', 'left/front o2', 'left front o2', 'front o2',
+            'left/front o2 sensor', 'o2 sensor bank 1', 'lf o2'],
+    O2_B2: ['o2 b2', 'o2 bank 2', 'right/rear o2', 'right rear o2', 'rear o2',
+            'right/rear o2 sensor', 'o2 sensor bank 2', 'rr o2'],
+    O2: ['o2', 'o2 sensor', 'oxygen sensor', 'o2 mv', 'o2 (mv)'],
+    TIME: ['time', 'timestamp', 'sample time', 'log time', 'seconds']
   };
 
   var CANONICAL_ORDER = Object.keys(SIGNAL_ALIASES);
@@ -52,8 +58,12 @@
   }
 
   // Score a normalized header against one alias. Higher is better.
+  // Exact matches get a small specificity bonus so that a longer, more
+  // specific alias (e.g. "left/front o2 sensor") beats a shorter one
+  // (e.g. "left/front o2") when both match exactly.
   function aliasScore(normHeader, alias) {
-    if (normHeader === alias) return 100;
+    function specificity() { return Math.min(9, Math.floor(alias.length / 8)); }
+    if (normHeader === alias) return 100 + specificity();
     // Whole-word containment, e.g. header "stft bank 1 (%)" contains alias "stft b1"? no —
     // but "engine rpm (rpm)" contains "rpm" as a word.
     var words = normHeader.split(' ');

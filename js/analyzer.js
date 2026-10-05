@@ -264,6 +264,125 @@
     };
   }
 
+  /**
+   * Narrowband O2 analysis (for cars without a wideband).
+   * Per-cell rich/lean bias from O2 voltage, cross-count sensor health,
+   * and a WOT richness safety check.
+   * Thresholds in mV: <300 lean, 300-600 switching, >600 rich.
+   */
+  function analyzeNarrowband(rows, mapResult) {
+    var b1Col = P66.columnFor(mapResult, 'O2_B1');
+    var b2Col = P66.columnFor(mapResult, 'O2_B2');
+    var soloCol = P66.columnFor(mapResult, 'O2');
+    var banks = [];
+    if (b1Col) banks.push({ name: 'bank1', col: b1Col });
+    if (b2Col) banks.push({ name: 'bank2', col: b2Col });
+    if (!banks.length && soloCol) banks.push({ name: 'single', col: soloCol });
+    var rpmCol = P66.columnFor(mapResult, 'RPM');
+    var mapCol = P66.columnFor(mapResult, 'MAP');
+    if (!banks.length || !rpmCol || !mapCol) {
+      return { available: false, reason: 'Need O2 sensor (mV), RPM and MAP channels.' };
+    }
+
+    // Per-cell bias
+    var cells = {};
+    rows.forEach(function (row) {
+      var rpm = num(row[rpmCol]);
+      var map = num(row[mapCol]);
+      if (rpm === null || map === null) return;
+      var mvs = banks.map(function (b) { return num(row[b.col]); })
+        .filter(function (v) { return v !== null; });
+      if (!mvs.length) return;
+      var avgMv = mvs.reduce(function (a, v) { return a + v; }, 0) / mvs.length;
+      var key = rpmBin(rpm) + '|' + mapBin(map);
+      var c = cells[key] || (cells[key] = { count: 0, sumMv: 0, rich: 0, lean: 0 });
+      c.count++;
+      c.sumMv += avgMv;
+      if (avgMv > 600) c.rich++;
+      else if (avgMv < 300) c.lean++;
+    });
+    var cellList = Object.keys(cells).map(function (key) {
+      var parts = key.split('|');
+      var c = cells[key];
+      var avgMv = c.sumMv / c.count;
+      var pctRich = 100 * c.rich / c.count;
+      var pctLean = 100 * c.lean / c.count;
+      var bias = 'switching';
+      if (avgMv > 600 && pctRich > 60) bias = 'rich';
+      else if (avgMv < 350 && pctLean > 60) bias = 'lean';
+      return {
+        rpmBin: parts[0], mapBin: parts[1], samples: c.count,
+        avgMv: Math.round(avgMv), pctRich: round2(pctRich), pctLean: round2(pctLean),
+        bias: bias
+      };
+    }).sort(function (a, b) { return b.samples - a.samples; });
+
+    // Cross-counts (sensor health): threshold crossings in closed-loop-ish rows.
+    var STOICH_MV = 450;
+    var timeCol = P66.columnFor(mapResult, 'TIME');
+    var crossCounts = banks.map(function (b) {
+      var crossings = 0, samples = 0, prevAbove = null, firstT = null, lastT = null;
+      rows.forEach(function (row, i) {
+        var region = row._region || 'cruise';
+        if (region !== 'cruise' && region !== 'idle') return;
+        var v = num(row[b.col]);
+        if (v === null) return;
+        samples++;
+        if (timeCol) {
+          var t = num(row[timeCol]);
+          if (t !== null) {
+            if (firstT === null) firstT = t;
+            lastT = t;
+          }
+        }
+        var above = v > STOICH_MV;
+        if (prevAbove !== null && above !== prevAbove) crossings++;
+        prevAbove = above;
+      });
+      var perMin = null;
+      if (samples > 30) {
+        var minutes = (firstT !== null && lastT !== null && lastT > firstT)
+          ? (lastT - firstT) / 60
+          : samples / 600; // fallback: assume ~10 Hz
+        if (minutes > 0) perMin = round2(crossings / minutes);
+      }
+      var health = 'unknown';
+      if (perMin !== null) {
+        health = perMin >= 30 ? 'healthy' : (perMin >= 10 ? 'lazy' : 'dead/slow');
+      }
+      return { bank: b.name, crossings: crossings, samples: samples, perMin: perMin, health: health };
+    });
+
+    // WOT richness safety check.
+    var wotMvs = [];
+    rows.forEach(function (row) {
+      if ((row._region || '') !== 'wot') return;
+      banks.forEach(function (b) {
+        var v = num(row[b.col]);
+        if (v !== null) wotMvs.push(v);
+      });
+    });
+    var wotCheck = { samples: wotMvs.length, status: 'no wot data' };
+    if (wotMvs.length >= 10) {
+      var wotAvg = wotMvs.reduce(function (a, v) { return a + v; }, 0) / wotMvs.length;
+      var wotRichPct = 100 * wotMvs.filter(function (v) { return v > 700; }).length / wotMvs.length;
+      wotCheck = {
+        samples: wotMvs.length,
+        avgMv: Math.round(wotAvg),
+        pctRich: round2(wotRichPct),
+        status: wotAvg > 700 ? 'rich (normal)' : (wotAvg > 550 ? 'marginal — verify fueling' : 'LEAN AT WOT — investigate immediately')
+      };
+    }
+
+    return {
+      available: true,
+      cells: cellList,
+      cellCount: cellList.length,
+      crossCounts: crossCounts,
+      wotCheck: wotCheck
+    };
+  }
+
   function regionDistribution(rows) {
     var dist = {};
     REGIONS.forEach(function (r) { dist[r] = 0; });
@@ -290,7 +409,8 @@
       missingChannels: missing,
       fuelTrims: analyzeFuelTrims(rows, mapResult),
       knock: analyzeKnock(rows, mapResult),
-      lambda: analyzeLambda(rows, mapResult)
+      lambda: analyzeLambda(rows, mapResult),
+      narrowband: analyzeNarrowband(rows, mapResult)
     };
   }
 
@@ -301,6 +421,7 @@
   P66.analyzeFuelTrims = analyzeFuelTrims;
   P66.analyzeKnock = analyzeKnock;
   P66.analyzeLambda = analyzeLambda;
+  P66.analyzeNarrowband = analyzeNarrowband;
   P66.analyzeSession = analyzeSession;
   P66.toLambda = toLambda;
   P66.REGIONS = REGIONS;

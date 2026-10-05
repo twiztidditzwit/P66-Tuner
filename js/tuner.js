@@ -44,12 +44,20 @@
 
   /**
    * Fueling suggestions from trim-bias cells.
-   * Positive avg trim (lean) -> suggest adding fuel: correction = -avgTrim,
-   * expressed as a VE/MAF multiplier delta in percent.
+   * Positive avg trim = ECU adding fuel = running lean = VE/MAF table is
+   * low there, so increase it by approximately the trim amount.
+   * When a narrowband report is available, per-cell O2 bias corroborates
+   * (or challenges) each suggestion and adjusts confidence.
    */
-  function fuelSuggestions(fuelReport, gates) {
+  function fuelSuggestions(fuelReport, gates, nbReport) {
     var out = [];
     if (!fuelReport || !fuelReport.available) return out;
+    var nbByCell = {};
+    if (nbReport && nbReport.available) {
+      nbReport.cells.forEach(function (c) {
+        nbByCell[c.rpmBin + '|' + c.mapBin] = c;
+      });
+    }
     fuelReport.cells.forEach(function (cell) {
       if (cell.samples < gates.minCellSamples) {
         out.push({
@@ -66,13 +74,28 @@
       var rawDelta = cell.avgTrim;
       var delta = round2(clamp(rawDelta, -gates.maxFuelDeltaPct, gates.maxFuelDeltaPct));
       var capped = Math.abs(rawDelta) > gates.maxFuelDeltaPct;
+      var confidence = cell.samples >= gates.minCellSamples * 2 ? 'high' : 'medium';
+      var corroboration = '';
+      var nb = nbByCell[cell.rpmBin + '|' + cell.mapBin];
+      if (nb && nb.samples >= 10) {
+        var trimSaysLean = cell.avgTrim > 0;
+        if ((trimSaysLean && nb.bias === 'lean') || (!trimSaysLean && nb.bias === 'rich')) {
+          corroboration = ' Narrowband O2 agrees (' + nb.bias + ', avg ' + nb.avgMv + ' mV over ' +
+            nb.samples + ' samples) — confidence raised.';
+          confidence = 'high';
+        } else if (nb.bias !== 'switching') {
+          corroboration = ' Narrowband O2 disagrees (reads ' + nb.bias + ', avg ' + nb.avgMv +
+            ' mV) — treat cautiously, verify sensor health.';
+          if (confidence === 'high') confidence = 'medium';
+        }
+      }
       out.push({
         kind: 'fuel', table: 'VE/MAF', cell: cell.rpmBin + ' RPM / ' + cell.mapBin + ' kPa',
         action: delta > 0 ? 'add fuel' : 'remove fuel', deltaPct: delta,
         reason: 'Avg combined trim ' + (cell.avgTrim > 0 ? '+' : '') + cell.avgTrim +
           '% over ' + cell.samples + ' samples (stddev ' + cell.stddev + ').' +
-          (capped ? ' Capped at mode limit; re-log and iterate.' : ''),
-        confidence: cell.samples >= gates.minCellSamples * 2 ? 'high' : 'medium',
+          (capped ? ' Capped at mode limit; re-log and iterate.' : '') + corroboration,
+        confidence: confidence,
         samples: cell.samples
       });
     });
@@ -181,7 +204,7 @@
     mode = MODES[mode] ? mode : 'conservative';
     var gates = MODES[mode];
     var suggestions = []
-      .concat(fuelSuggestions(report.fuelTrims, gates))
+      .concat(fuelSuggestions(report.fuelTrims, gates, report.narrowband))
       .concat(sparkSuggestions(report.knock, gates))
       .concat(peSuggestions(report.lambda, gates));
 

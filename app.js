@@ -30,8 +30,9 @@
     LTFT: 'LTFT', LTFT_B1: 'LTFT Bank 1', LTFT_B2: 'LTFT Bank 2',
     KR: 'Knock Retard', IAT: 'IAT', ECT: 'ECT',
     CMD_LAMBDA: 'Commanded AFR/Lambda', WB_LAMBDA: 'Wideband AFR/Lambda',
+    O2_B1: 'O2 Bank 1 (narrowband)', O2_B2: 'O2 Bank 2 (narrowband)', O2: 'O2 (narrowband)',
     SPARK_ADV: 'Spark Advance', INJ_PW: 'Injector PW',
-    VSS: 'Vehicle Speed', BARO: 'Baro'
+    VSS: 'Vehicle Speed', BARO: 'Baro', TIME: 'Time'
   };
 
   // Session state
@@ -220,6 +221,29 @@
         l.pctWithin3Pct + '% within ±0.03 λ (' + l.samples + ' samples).</p>';
     } else {
       html += '<p class="muted">' + esc(l.reason || 'No lambda data.') + '</p>';
+    }
+
+    // Narrowband O2
+    var nb = report.narrowband;
+    html += '<h3>Narrowband O2</h3>';
+    if (nb.available) {
+      html += '<p class="muted">Sensor health: ' +
+        nb.crossCounts.map(function (c) {
+          return esc(c.bank) + ' ' + esc(c.health) +
+            (c.perMin !== null ? ' (' + c.perMin + '/min)' : '');
+        }).join(', ') + '. WOT check: ' + esc(nb.wotCheck.status) + '.</p>';
+      if (nb.cells.length) {
+        html += '<table><thead><tr><th>RPM</th><th>MAP kPa</th><th>Avg O2 mV</th><th>Bias</th><th>Samples</th></tr></thead><tbody>';
+        nb.cells.slice(0, 8).forEach(function (c) {
+          var cls = c.bias === 'lean' ? 'status-bad' : (c.bias === 'rich' ? 'status-warn' : 'status-ok');
+          html += '<tr><td>' + esc(c.rpmBin) + '</td><td>' + esc(c.mapBin) + '</td>' +
+            '<td>' + c.avgMv + '</td><td class="' + cls + '">' + c.bias + '</td>' +
+            '<td>' + c.samples + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+    } else {
+      html += '<p class="muted">' + esc(nb.reason || 'No O2 data.') + '</p>';
     }
 
     analysisResults.innerHTML = html;
