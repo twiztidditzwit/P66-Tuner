@@ -233,5 +233,6 @@
   P66.analyzeKnock = analyzeKnock;
   P66.analyzeLambda = analyzeLambda;
   P66.analyzeSession = analyzeSession;
+  P66.toLambda = toLambda;
   P66.REGIONS = REGIONS;
 })(typeof window !== 'undefined' ? window : global);

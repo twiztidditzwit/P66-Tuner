@@ -16,6 +16,13 @@
   var analysisResults = document.getElementById('analysis-results');
   var tuneResults = document.getElementById('tune-results');
   var modeSelect = document.getElementById('mode');
+  var dashParts = {
+    heatmap: document.getElementById('heatmap'),
+    regions: document.getElementById('region-chart'),
+    knock: document.getElementById('knock-chart'),
+    lambda: document.getElementById('lambda-chart'),
+    comparison: document.getElementById('comparison')
+  };
 
   var CANONICAL_LABELS = {
     RPM: 'RPM', MAP: 'MAP', MAF: 'MAF', TPS: 'TPS',
@@ -32,6 +39,20 @@
   var parsedLog = null;
   var mapResult = null;
   var sessionReport = null;
+  var sessionHistory = []; // past reports for before/after comparison
+
+  function resetDashboardPlaceholders() {
+    var msgs = {
+      heatmap: 'Run analysis to render the heatmap.',
+      regions: 'Run analysis to render region breakdown.',
+      knock: 'Run analysis to render knock events.',
+      lambda: 'Run analysis to render the lambda trace.',
+      comparison: 'Run analysis on two sessions to compare before/after.'
+    };
+    Object.keys(dashParts).forEach(function (k) {
+      if (dashParts[k]) dashParts[k].innerHTML = '<p class="muted">' + msgs[k] + '</p>';
+    });
+  }
 
   function writeConsole(message) {
     var ts = new Date().toLocaleTimeString();
@@ -101,6 +122,7 @@
           sessionReport = null; // invalidate previous analysis
           analysisResults.innerHTML = '<p class="muted">Log reloaded — run analysis again.</p>';
           tuneResults.innerHTML = '<p class="muted">Generate tune suggestions after analysis.</p>';
+          resetDashboardPlaceholders();
           refreshSummary();
           renderMappingPreview();
           writeConsole('LOG parsed: ' + parsedLog.rowCount + ' rows, ' +
@@ -210,9 +232,13 @@
     }
     try {
       sessionReport = P66.analyzeSession(parsedLog, mapResult);
+      sessionHistory.push(sessionReport);
+      if (sessionHistory.length > 10) sessionHistory.shift();
       renderAnalysis(sessionReport);
+      P66.renderDashboard(dashParts, sessionReport, parsedLog, mapResult, sessionHistory);
       writeConsole('Analysis complete: ' + sessionReport.rowCount + ' rows, ' +
-        Object.keys(sessionReport.regionDistribution).length + ' regions classified.');
+        Object.keys(sessionReport.regionDistribution).length + ' regions classified. ' +
+        '(session ' + sessionHistory.length + ' in history)');
     } catch (err) {
       writeConsole('Analysis failed: ' + (err && err.message ? err.message : err));
     }

@@ -172,3 +172,89 @@ pre {
   line-height: 1.45;
   color: #d6e2ff;
 }
+
+/* Dashboard */
+.chart {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart-label {
+  fill: var(--muted);
+}
+
+.chart-legend {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  margin: 0 4px 0 10px;
+  vertical-align: -1px;
+}
+
+.swatch:first-child {
+  margin-left: 0;
+}
+
+.chart-empty {
+  stroke: #232c3a;
+  stroke-dasharray: 3 3;
+}
+
+.dashboard-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.dashboard-grid h3 {
+  margin: 0.2rem 0 0.6rem;
+  font-size: 1rem;
+}
+
+.region-bars {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.region-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 110px;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.92rem;
+}
+
+.region-name {
+  text-transform: capitalize;
+  color: var(--muted);
+}
+
+.region-bar {
+  background: #10161f;
+  border-radius: 6px;
+  height: 14px;
+  overflow: hidden;
+}
+
+.region-fill {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+}
+
+.region-idle { background: #58a6ff; }
+.region-cruise { background: #3fb950; }
+.region-transient { background: #d29922; }
+.region-wot { background: #f85149; }
+
+.region-num {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

@@ -27,7 +27,7 @@
                  'eq ratio', 'equivalence ratio', 'desired afr', 'cmd lambda', 'target lambda',
                  'commanded eq', 'afr commanded'],
     WB_LAMBDA: ['wideband', 'wideband afr', 'wideband_lambda', 'wb afr', 'wbafr', 'wbo2',
-                'afr wideband', 'lambda wideband', 'actual afr', 'measured afr', 'afr (wideband)'],
+                'wb lambda', 'afr wideband', 'lambda wideband', 'actual afr', 'measured afr', 'afr (wideband)'],
     SPARK_ADV: ['spark advance', 'spark_advance', 'ignition timing', 'timing advance',
                 'spark (deg)', 'total timing', 'sparkadv'],
     INJ_PW: ['injector pulse width', 'inj pw', 'injector_pw', 'pulse width', 'ipw',

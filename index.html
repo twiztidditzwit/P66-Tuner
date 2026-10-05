@@ -86,6 +86,32 @@
       </section>
 
       <section class="card grid-span-2">
+        <h2>Dashboard</h2>
+        <div class="dashboard-grid">
+          <div>
+            <h3>Fuel Trim Heatmap <span class="muted" style="font-weight:normal">— RPM × MAP, avg combined trim</span></h3>
+            <div id="heatmap"><p class="muted">Run analysis to render the heatmap.</p></div>
+          </div>
+          <div>
+            <h3>Operating Regions</h3>
+            <div id="region-chart"><p class="muted">Run analysis to render region breakdown.</p></div>
+          </div>
+          <div>
+            <h3>Knock Timeline</h3>
+            <div id="knock-chart"><p class="muted">Run analysis to render knock events.</p></div>
+          </div>
+          <div>
+            <h3>Lambda Trace <span class="muted" style="font-weight:normal">— commanded vs wideband</span></h3>
+            <div id="lambda-chart"><p class="muted">Run analysis to render the lambda trace.</p></div>
+          </div>
+          <div>
+            <h3>Session Comparison <span class="muted" style="font-weight:normal">— previous vs current</span></h3>
+            <div id="comparison"><p class="muted">Run analysis on two sessions to compare before/after.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card grid-span-2">
         <h2>Analysis Results</h2>
         <div id="analysis-results">
           <p class="muted">Run analysis on a loaded log to see region breakdown and error metrics.</p>
@@ -109,6 +135,7 @@
     <script src="js/channel-mapper.js"></script>
     <script src="js/analyzer.js"></script>
     <script src="js/tuner.js"></script>
+    <script src="js/dashboard.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
