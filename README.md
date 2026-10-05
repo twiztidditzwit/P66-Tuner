@@ -109,6 +109,22 @@ Regions are classified heuristically (`table-candidate`, `scalar/flag`,
 `code?`) by size and entropy. Feed the region map into XDF development:
 table-candidate addresses are where VE, spark, and PE tables live.
 
+## Checksum
+
+No calibration checksum has been found for the P66:
+
+- The XDF (285 tables, 571 constants, 227 flags) contains no checksum definition.
+- No common GM checksum scheme (16-bit BE/LE sum, byte sum) validates on the
+  stock binary (`tools/checksum.js`).
+- Community practice is to edit P66 bins in TunerPro (no checksum plugin) and
+  flash with Winflash, with engines running normally afterward.
+
+`tools/checksum.js` verifies any binary against the common schemes. The app
+applies patches without checksum correction and labels this clearly.
+**Bench-verify on a spare PCM before flashing a running vehicle** — absence
+of evidence is not proof, and a full boot-code disassembly is the only way
+to be certain.
+
 ## Narrowband O2 Analysis
 
 For cars without a wideband (the common case on this platform), the analyzer

@@ -358,9 +358,11 @@
           });
           html += '</tbody></table>';
           html += '<p><button id="download-bin-btn" style="width:auto;padding:0.55rem 1.2rem;">Download patched binary</button></p>';
-          html += '<p class="status-bad"><strong>Checksum not corrected.</strong> ' +
-            'The P66 XDF carries no checksum definition — validate and fix the checksum ' +
-            'before flashing, or the PCM may reject the image.</p>';
+          html += '<p class="status-warn"><strong>Checksum status: none found.</strong> ' +
+            'No checksum definition exists in the P66 XDF, no common GM checksum scheme ' +
+            'validates on the stock binary, and community practice is to flash P66 bins ' +
+            'without manual checksum correction. Bench-verify on a spare PCM before ' +
+            'flashing a running vehicle.</p>';
         } else {
           html += '<p class="muted">No fuel patches applied (no actionable fuel suggestions).</p>';
         }
@@ -386,7 +388,7 @@
           URL.revokeObjectURL(a.href);
           a.remove();
         }, 1000);
-        writeConsole('Patched binary downloaded (' + lastPatches.patches.length + ' patches). Checksum NOT corrected — validate before flashing.');
+        writeConsole('Patched binary downloaded (' + lastPatches.patches.length + ' patches). No checksum correction applied (none found for P66) — bench-verify before flashing.');
       });
     }
   }
