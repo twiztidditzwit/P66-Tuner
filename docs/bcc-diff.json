@@ -1,0 +1,635 @@
+{
+ "reference": "stock-1995-camaro-l32.bin",
+ "compared": [
+  "cal-16212614-95-f-auto-fed.bin",
+  "cal-16212294-95-f-auto-fed.bin",
+  "cal-16212604-95-f-auto-fed.bin",
+  "cal-16203281-94-f-auto-fed.bin",
+  "cal-16203271-94-f-auto-cal.bin"
+ ],
+ "imageSize": 65536,
+ "regions": [
+  {
+   "start": 0,
+   "end": 3,
+   "size": 4,
+   "startHex": "0x000000",
+   "endHex": "0x000003",
+   "differsIn": [
+    "cal-16212614-95-f-auto-fed.bin",
+    "cal-16212294-95-f-auto-fed.bin",
+    "cal-16212604-95-f-auto-fed.bin",
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.5,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 109,
+   "end": 112,
+   "size": 4,
+   "startHex": "0x00006D",
+   "endHex": "0x000070",
+   "differsIn": [
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    1.5
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 126,
+   "end": 129,
+   "size": 4,
+   "startHex": "0x00007E",
+   "endHex": "0x000081",
+   "differsIn": [
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 1886,
+   "end": 1889,
+   "size": 4,
+   "startHex": "0x00075E",
+   "endHex": "0x000761",
+   "differsIn": [
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    1.5
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 3641,
+   "end": 3646,
+   "size": 6,
+   "startHex": "0x000E39",
+   "endHex": "0x000E3E",
+   "differsIn": [
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2.58,
+    2.58,
+    2.58,
+    2.58,
+    2.58,
+    1.46
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 32768,
+   "end": 32771,
+   "size": 4,
+   "startHex": "0x008000",
+   "endHex": "0x008003",
+   "differsIn": [
+    "cal-16212614-95-f-auto-fed.bin",
+    "cal-16212294-95-f-auto-fed.bin",
+    "cal-16212604-95-f-auto-fed.bin",
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 33018,
+   "end": 33028,
+   "size": 11,
+   "startHex": "0x0080FA",
+   "endHex": "0x008104",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.94,
+    1.94,
+    1.94,
+    1.94,
+    0.44,
+    0.44
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 34180,
+   "end": 34185,
+   "size": 6,
+   "startHex": "0x008584",
+   "endHex": "0x008589",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2.58,
+    2.58,
+    2.58,
+    2.58,
+    2.58,
+    2.58
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 34260,
+   "end": 34263,
+   "size": 4,
+   "startHex": "0x0085D4",
+   "endHex": "0x0085D7",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    1.5,
+    1.5
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 34328,
+   "end": 34331,
+   "size": 4,
+   "startHex": "0x008618",
+   "endHex": "0x00861B",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0.81,
+    0.81
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 34373,
+   "end": 34377,
+   "size": 5,
+   "startHex": "0x008645",
+   "endHex": "0x008649",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.92,
+    1.92,
+    1.92,
+    1.92,
+    0,
+    0
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 34835,
+   "end": 34868,
+   "size": 34,
+   "startHex": "0x008813",
+   "endHex": "0x008834",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0.98,
+    0.98
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 34903,
+   "end": 34919,
+   "size": 17,
+   "startHex": "0x008857",
+   "endHex": "0x008867",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 36138,
+   "end": 36154,
+   "size": 17,
+   "startHex": "0x008D2A",
+   "endHex": "0x008D3A",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 36277,
+   "end": 36293,
+   "size": 17,
+   "startHex": "0x008DB5",
+   "endHex": "0x008DC5",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 36504,
+   "end": 36508,
+   "size": 5,
+   "startHex": "0x008E98",
+   "endHex": "0x008E9C",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.92,
+    1.92,
+    1.92,
+    1.92,
+    2.32,
+    2.32
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36515,
+   "end": 36519,
+   "size": 5,
+   "startHex": "0x008EA3",
+   "endHex": "0x008EA7",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.92,
+    1.92,
+    1.92,
+    1.92,
+    2.32,
+    2.32
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36526,
+   "end": 36530,
+   "size": 5,
+   "startHex": "0x008EAE",
+   "endHex": "0x008EB2",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.92,
+    1.92,
+    1.92,
+    1.92,
+    2.32,
+    2.32
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36537,
+   "end": 36541,
+   "size": 5,
+   "startHex": "0x008EB9",
+   "endHex": "0x008EBD",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.92,
+    1.92,
+    1.92,
+    1.92,
+    2.32,
+    2.32
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36551,
+   "end": 36554,
+   "size": 4,
+   "startHex": "0x008EC7",
+   "endHex": "0x008ECA",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.5,
+    1.5,
+    1.5,
+    1.5,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36562,
+   "end": 36565,
+   "size": 4,
+   "startHex": "0x008ED2",
+   "endHex": "0x008ED5",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.5,
+    1.5,
+    1.5,
+    1.5,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36573,
+   "end": 36576,
+   "size": 4,
+   "startHex": "0x008EDD",
+   "endHex": "0x008EE0",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.5,
+    1.5,
+    1.5,
+    1.5,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 36584,
+   "end": 36587,
+   "size": 4,
+   "startHex": "0x008EE8",
+   "endHex": "0x008EEB",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.5,
+    1.5,
+    1.5,
+    1.5,
+    2,
+    2
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 37227,
+   "end": 37242,
+   "size": 16,
+   "startHex": "0x00916B",
+   "endHex": "0x00917A",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    3.45,
+    3.45,
+    3.45,
+    3.45,
+    3.25,
+    3.25
+   ],
+   "classification": "table-candidate (common table size)"
+  },
+  {
+   "start": 37250,
+   "end": 37256,
+   "size": 7,
+   "startHex": "0x009182",
+   "endHex": "0x009188",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2.81,
+    2.81,
+    2.81,
+    2.81,
+    2.81,
+    2.81
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 37264,
+   "end": 37270,
+   "size": 7,
+   "startHex": "0x009190",
+   "endHex": "0x009196",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    1.15,
+    1.15,
+    1.15,
+    1.15,
+    2.81,
+    2.81
+   ],
+   "classification": "likely scalar/flag"
+  },
+  {
+   "start": 37320,
+   "end": 37336,
+   "size": 17,
+   "startHex": "0x0091C8",
+   "endHex": "0x0091D8",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 37725,
+   "end": 37741,
+   "size": 17,
+   "startHex": "0x00935D",
+   "endHex": "0x00936D",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    2.5,
+    2.5,
+    2.5,
+    2.5,
+    1.74,
+    1.74
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 37759,
+   "end": 37775,
+   "size": 17,
+   "startHex": "0x00937F",
+   "endHex": "0x00938F",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    1.74,
+    1.74
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 37793,
+   "end": 37809,
+   "size": 17,
+   "startHex": "0x0093A1",
+   "endHex": "0x0093B1",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    1.74,
+    1.74
+   ],
+   "classification": "small calibration block or code patch"
+  },
+  {
+   "start": 37827,
+   "end": 37843,
+   "size": 17,
+   "startHex": "0x0093C3",
+   "endHex": "0x0093D3",
+   "differsIn": [
+    "cal-16203281-94-f-auto-fed.bin",
+    "cal-16203271-94-f-auto-cal.bin"
+   ],
+   "entropy": [
+    0,
+    0,
+    0,
+    0,
+    1.74,
+    1.74
+   ],
+   "classification": "small calibration block or code patch"
+  }
+ ]
+}
