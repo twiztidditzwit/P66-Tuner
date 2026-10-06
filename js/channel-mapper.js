@@ -24,6 +24,7 @@
     LTFT_B2: ['ltft b2', 'ltft bank 2', 'ltft_2', 'long term fuel trim bank 2', 'ltftb2',
               'right/rear blm', 'right rear blm', 'rr blm'],
     LTFT: ['ltft', 'long term fuel trim', 'long_term_fuel_trim', 'lt fuel trim'],
+    BLM_CELL: ['blm cell', 'blmcell', 'fuel trim cell', 'block learn cell'],
     KR: ['kr', 'knock retard', 'knock_retard', 'spark retard', 'knock retard (deg)', 'kr (deg)'],
     IAT: ['iat', 'mat', 'manifold air temp', 'intake air temp', 'intake_air_temp', 'iat f', 'iat (f)', 'air temp'],
     ECT: ['ect', 'coolant', 'coolant temp', 'engine coolant temp', 'coolant_temperature', 'ect f', 'ect (f)'],
@@ -43,7 +44,7 @@
     O2_B2: ['o2 b2', 'o2 bank 2', 'right/rear o2', 'right rear o2', 'rear o2',
             'right/rear o2 sensor', 'o2 sensor bank 2', 'rr o2'],
     O2: ['o2', 'o2 sensor', 'oxygen sensor', 'o2 mv', 'o2 (mv)'],
-    TIME: ['time', 'timestamp', 'sample time', 'log time', 'seconds']
+    TIME: ['=time', 'timestamp', 'sample time', 'log time', 'seconds']
   };
 
   var CANONICAL_ORDER = Object.keys(SIGNAL_ALIASES);
@@ -61,9 +62,15 @@
   // Exact matches get a small specificity bonus so that a longer, more
   // specific alias (e.g. "left/front o2 sensor") beats a shorter one
   // (e.g. "left/front o2") when both match exactly.
+  // An alias prefixed with '=' requires an exact match — used for short
+  // generic words like "time" that would otherwise match inside longer
+  // unrelated headers (e.g. "1-2 Shift Time Error").
   function aliasScore(normHeader, alias) {
+    var exactOnly = alias.charAt(0) === '=';
+    if (exactOnly) alias = alias.slice(1);
     function specificity() { return Math.min(9, Math.floor(alias.length / 8)); }
     if (normHeader === alias) return 100 + specificity();
+    if (exactOnly) return 0;
     // Whole-word containment, e.g. header "stft bank 1 (%)" contains alias "stft b1"? no —
     // but "engine rpm (rpm)" contains "rpm" as a word.
     var words = normHeader.split(' ');

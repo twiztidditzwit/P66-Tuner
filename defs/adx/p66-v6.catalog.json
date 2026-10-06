@@ -1,0 +1,1061 @@
+{
+  "source": "defs/adx/p66-v6.adx",
+  "generated": "2026-10-06T00:36:14.617Z",
+  "header": {
+    "guid": "34d34c70-72dd-4d65-a488-e4fe6fe7dc58",
+    "author": "Robert Saar",
+    "desc": "send mode 8 before connecting. questions/comments should be directed to robertisaar@yahoo.com. check/clear codes and VIN can be utilised using the quick-send.",
+    "baud": "8192",
+    "objectcount": "292"
+  },
+  "commands": [
+    {
+      "id": "COMMAND0",
+      "idhash": "0xC579AD33",
+      "title": "Mode 1 Message 0(Main Data) Send",
+      "size": "0x5",
+      "bytestring": "E4570100C4"
+    },
+    {
+      "id": "COMMAND1",
+      "idhash": "0xC579A373",
+      "title": "Mode 1 Message 2(Codes) Send",
+      "size": "0x5",
+      "bytestring": "E4570102C2"
+    },
+    {
+      "id": "COMMAND2",
+      "idhash": "0xC579B9D3",
+      "title": "Mode 8(Disable Communications) Send",
+      "size": "0x4",
+      "bytestring": "E45608BE"
+    },
+    {
+      "id": "COMMAND3",
+      "idhash": "0xC579A6D3",
+      "title": "Mode 10(Clear Codes) Send",
+      "size": "0x4",
+      "bytestring": "E4560ABC"
+    },
+    {
+      "id": "COMMAND4",
+      "idhash": "0xC579A4D3",
+      "title": "Mode 1 Message 4(VIN) Send",
+      "size": "0x5",
+      "bytestring": "E4570104C0"
+    },
+    {
+      "id": "mode9send",
+      "idhash": "0x53E614A6",
+      "title": "Mode 9(Enable Communications) Send",
+      "size": "0x3",
+      "bytestring": "E45609"
+    },
+    {
+      "id": "mode4commafr",
+      "idhash": "0xD12DEE2C",
+      "title": "Commanded AFR (13.5)",
+      "size": "0xF",
+      "bytestring": "E46204000000000004000000008700"
+    },
+    {
+      "id": "mode4154afr",
+      "idhash": "0x00ECFF86",
+      "title": "Commanded AFR (15.4)",
+      "size": "0xF",
+      "bytestring": "E46204000000000004000000009A00"
+    },
+    {
+      "id": "resetblmcells",
+      "idhash": "0xD36F291C",
+      "title": "Reset BLM Cells",
+      "size": "0xF",
+      "bytestring": "E46204000000000800000000000000"
+    },
+    {
+      "id": "removechokefue",
+      "idhash": "0xD14C1AB4",
+      "title": "Remove Choke Fueling",
+      "size": "0xF",
+      "bytestring": "E46204000000000008000000000000"
+    },
+    {
+      "id": "disablecyl6",
+      "idhash": "0x68A81D4A",
+      "title": "Disable Cylinder 6",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000000400"
+    },
+    {
+      "id": "disablecyl5",
+      "idhash": "0x68A81EEA",
+      "title": "Disable Cylinder 5",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000000800"
+    },
+    {
+      "id": "disablecyl4",
+      "idhash": "0x68A8098A",
+      "title": "Disable Cylinder 4",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000001000"
+    },
+    {
+      "id": "disablecyl3",
+      "idhash": "0x68A80B8A",
+      "title": "Disable Cylinder 3",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000002000"
+    },
+    {
+      "id": "disablecyl2",
+      "idhash": "0x68A8148A",
+      "title": "Disable Cylinder 2",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000004000"
+    },
+    {
+      "id": "disablecyl1",
+      "idhash": "0x68A80E2A",
+      "title": "Disable Cylinder 1",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000008000"
+    },
+    {
+      "id": "disable246",
+      "idhash": "0x533EB93A",
+      "title": "Disable Cylinders 2/4/6",
+      "size": "0xF",
+      "bytestring": "E46204000000000006000000005400"
+    },
+    {
+      "id": "disable135",
+      "idhash": "0x53547A9A",
+      "title": "Disable Cylinders 1/3/5",
+      "size": "0xF",
+      "bytestring": "E4620400000000000600000000A800"
+    },
+    {
+      "id": "600idlespeed",
+      "idhash": "0x2A18B94A",
+      "title": "Target Idle Speed (600)",
+      "size": "0xF",
+      "bytestring": "E46204000000000000300000300000"
+    },
+    {
+      "id": "target800idle",
+      "idhash": "0x23CDB0DC",
+      "title": "Target Idle Speed (800)",
+      "size": "0xF",
+      "bytestring": "E46204000000000000300000400000"
+    },
+    {
+      "id": "target1000",
+      "idhash": "0x8AC84BFF",
+      "title": "Target Idle Speed (1000)",
+      "size": "0xF",
+      "bytestring": "E46204000000000000300000500000"
+    },
+    {
+      "id": "target1200",
+      "idhash": "0x8A9BCBFF",
+      "title": "Target Idle Speed (1200)",
+      "size": "0xF",
+      "bytestring": "E46204000000000000300000600000"
+    },
+    {
+      "id": "target1400",
+      "idhash": "0x8AEFCBFF",
+      "title": "Target Idle Speed (1400)",
+      "size": "0xF",
+      "bytestring": "E46204000000000000300000700000"
+    },
+    {
+      "id": "target1600",
+      "idhash": "0x8ABCCBFF",
+      "title": "Target Idle Speed (1600)",
+      "size": "0xF",
+      "bytestring": "E46204000000000000300000800000"
+    },
+    {
+      "id": "clearallmode4",
+      "idhash": "0xCBE6F72F",
+      "title": "Clear All Mode 4 Effects",
+      "size": "0xF",
+      "bytestring": "E46204000000000000000000000000"
+    }
+  ],
+  "datastream": [
+    {
+      "id": "166",
+      "idhash": "0xCD51B01B",
+      "title": "Coolant",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "F",
+      "packetoffset": "0x02",
+      "sizeinbits": null,
+      "equation": "X * 1.350000 + -40.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "10",
+      "idhash": "0xDE6A9050",
+      "title": "Battery Voltage",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Volts",
+      "packetoffset": "0x03",
+      "sizeinbits": null,
+      "equation": "X * 0.100000 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "13",
+      "idhash": "0xDE6A9BB0",
+      "title": "MAT",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "F",
+      "packetoffset": "0x04",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "16",
+      "idhash": "0xDE6A8D70",
+      "title": "MAP",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "kPa",
+      "packetoffset": "0x05",
+      "sizeinbits": null,
+      "equation": "X * 0.369000 + 10.354000",
+      "outputtype": "3"
+    },
+    {
+      "id": "18",
+      "idhash": "0xDE6A9A70",
+      "title": "Barometric",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "kPa",
+      "packetoffset": "0x06",
+      "sizeinbits": null,
+      "equation": "X * 0.369000 + 10.354000",
+      "outputtype": "3"
+    },
+    {
+      "id": "19",
+      "idhash": "0xDE6A8D30",
+      "title": "TPS",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Volts",
+      "packetoffset": "0x07",
+      "sizeinbits": null,
+      "equation": "X * 0.019608 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "20",
+      "idhash": "0xDE69C450",
+      "title": "TPS",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "%",
+      "packetoffset": "0x08",
+      "sizeinbits": null,
+      "equation": "X * 0.392157 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "22",
+      "idhash": "0xDE69D0B0",
+      "title": "Transaxle Temp",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "F",
+      "packetoffset": "0x09",
+      "sizeinbits": null,
+      "equation": "X * 1.350000 + -40.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "23",
+      "idhash": "0xDE69CFB0",
+      "title": "Vehicle Speed",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "MPH",
+      "packetoffset": "0x0A",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "24",
+      "idhash": "0xDE69CDB0",
+      "title": "Desired Idle Speed",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "RPM",
+      "packetoffset": "0x0B",
+      "sizeinbits": null,
+      "equation": "X * 12.500000 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "121",
+      "idhash": "0xCD509B7B",
+      "title": "Engine Speed",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "RPM",
+      "packetoffset": "0x0C",
+      "sizeinbits": "16",
+      "equation": "1310720/X",
+      "outputtype": "3"
+    },
+    {
+      "id": "33",
+      "idhash": "0xDE6A2FB0",
+      "title": "Knock Counter",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Knocks",
+      "packetoffset": "0x0F",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "34",
+      "idhash": "0xDE6A2DB0",
+      "title": "Knock Retard",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "*",
+      "packetoffset": "0x10",
+      "sizeinbits": null,
+      "equation": "X * 0.175781 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "39",
+      "idhash": "0xDE6A3930",
+      "title": "BLM Cell",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x12",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "40",
+      "idhash": "0xDE6A6450",
+      "title": "Target Air/Fuel Ratio",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x13",
+      "sizeinbits": null,
+      "equation": "X * 0.100000 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "41",
+      "idhash": "0xDE6A6A10",
+      "title": "Base Pulse Width",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "mSec",
+      "packetoffset": "0x14",
+      "sizeinbits": "16",
+      "equation": "X * 0.015259 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "42",
+      "idhash": "0xDE6A70B0",
+      "title": "Right/Rear BLM",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x16",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "43",
+      "idhash": "0xDE6A6FB0",
+      "title": "Right/Rear INT",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x17",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "44",
+      "idhash": "0xDE6A6DB0",
+      "title": "Right/Rear O2 Sensor",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "mV",
+      "packetoffset": "0x18",
+      "sizeinbits": null,
+      "equation": "X * 4.420000 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "dfvkjwdnvlwkdf",
+      "idhash": "0xEE32E7F4",
+      "title": "Left/Front BLM",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x19",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "fnvlwnfklvwnjk",
+      "idhash": "0x04AC6624",
+      "title": "Left/Front INT",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x1A",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "fwhjeklcfnwlek",
+      "idhash": "0x340D3A67",
+      "title": "Left/Front O2 Sensor",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "mV",
+      "packetoffset": "0x1B",
+      "sizeinbits": null,
+      "equation": "X*4.42",
+      "outputtype": "3"
+    },
+    {
+      "id": "45",
+      "idhash": "0xDE6A7AD0",
+      "title": "IAC Position",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Steps",
+      "packetoffset": "0x1C",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "46",
+      "idhash": "0xDE6A7970",
+      "title": "IAC Minimum",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Steps",
+      "packetoffset": "0x1D",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "47",
+      "idhash": "0xDE6A6330",
+      "title": "Fuel Pump Voltage",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Volts",
+      "packetoffset": "0x1E",
+      "sizeinbits": null,
+      "equation": "X * 0.100000 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "ljdflvwklnfedf",
+      "idhash": "0xB93B4586",
+      "title": "A/C Evaporator Temp",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "*F",
+      "packetoffset": "0x1F",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "48",
+      "idhash": "0xDE6A6E70",
+      "title": "Spark Advance",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "*",
+      "packetoffset": "0x20",
+      "sizeinbits": "16",
+      "equation": "X*(90/255)",
+      "outputtype": "3"
+    },
+    {
+      "id": "49",
+      "idhash": "0xDE6A7930",
+      "title": "CCP Duty Cycle",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "%",
+      "packetoffset": "0x22",
+      "sizeinbits": null,
+      "equation": "X*(100/255)",
+      "outputtype": "3"
+    },
+    {
+      "id": "24xrpm",
+      "idhash": "0xDCC3A45C",
+      "title": "24X Based RPM",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "RPM",
+      "packetoffset": "0x27",
+      "sizeinbits": null,
+      "equation": "X*12.5",
+      "outputtype": "3"
+    },
+    {
+      "id": "64",
+      "idhash": "0xDE68F5B0",
+      "title": "A/C Pressure Transducer",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "PSI",
+      "packetoffset": "0x28",
+      "sizeinbits": null,
+      "equation": "X * 1.875000 + -18.750000",
+      "outputtype": "3"
+    },
+    {
+      "id": "71",
+      "idhash": "0xDE6BBA10",
+      "title": "Total of History Malf Codes Stored",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Codes",
+      "packetoffset": "0x2C",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "72",
+      "idhash": "0xDE6BA0B0",
+      "title": "TCC Duty Cycle",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "%",
+      "packetoffset": "0x2D",
+      "sizeinbits": null,
+      "equation": "X * 0.392157 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "sdfvjsfbvksfnj",
+      "idhash": "0xD6AF908C",
+      "title": "Force Motor/PCS Duty Cycle",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "%",
+      "packetoffset": "0x2E",
+      "sizeinbits": null,
+      "equation": "X*(100/255)",
+      "outputtype": "3"
+    },
+    {
+      "id": "nfjwefvwemvnef",
+      "idhash": "0x2E9F8936",
+      "title": "3-2 Downshift Solenoid Duty Cycle",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "%",
+      "packetoffset": "0x2F",
+      "sizeinbits": null,
+      "equation": "X*(100/255)",
+      "outputtype": "3"
+    },
+    {
+      "id": "73",
+      "idhash": "0xDE6BBFB0",
+      "title": "TCC Slipage",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "RPM",
+      "packetoffset": "0x30",
+      "sizeinbits": "16",
+      "equation": "X * 0.125000 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "fmvwf,nf,vnwfn",
+      "idhash": "0x71A80A6D",
+      "title": "Output Shaft Speed",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "RPM",
+      "packetoffset": "0x32",
+      "sizeinbits": "16",
+      "equation": "X/8",
+      "outputtype": "3"
+    },
+    {
+      "id": "mfkvnfwklsnfkj",
+      "idhash": "0x6BDA1365",
+      "title": "Input Shaft Speed",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "RPM",
+      "packetoffset": "0x34",
+      "sizeinbits": "16",
+      "equation": "X/8",
+      "outputtype": "3"
+    },
+    {
+      "id": "md,fmkwernfkwe",
+      "idhash": "0xE8D854CB",
+      "title": "Commanded Pressure",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "PSI",
+      "packetoffset": "0x36",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "djvklefjhwvnjf",
+      "idhash": "0xD3EFD075",
+      "title": "FM/PCS Commanded Current",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Amps",
+      "packetoffset": "0x37",
+      "sizeinbits": null,
+      "equation": "X*.0196",
+      "outputtype": "3"
+    },
+    {
+      "id": "mfkvnklnvjnwrj",
+      "idhash": "0x41B547D9",
+      "title": "FM/PCS Read Current",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Amps",
+      "packetoffset": "0x38",
+      "sizeinbits": null,
+      "equation": "X*.0196",
+      "outputtype": "3"
+    },
+    {
+      "id": "dfnjvkwnfvjwnv",
+      "idhash": "0xB4C1AE00",
+      "title": "Current Adaptive Pressure Change",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x39",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "enjenfjkwenbfk",
+      "idhash": "0x3BDD71D3",
+      "title": "Current Adaptive Cell",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "",
+      "packetoffset": "0x3A",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "fnvfnvjwsnfvjs",
+      "idhash": "0xE81A0801",
+      "title": "1-2 Shift Time Error",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Seconds",
+      "packetoffset": "0x3B",
+      "sizeinbits": null,
+      "equation": "X/40",
+      "outputtype": "3"
+    },
+    {
+      "id": "fmvwklnvwljvnw",
+      "idhash": "0x5B9687A6",
+      "title": "2-3 Shift Time Error",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Seconds",
+      "packetoffset": "0x3C",
+      "sizeinbits": null,
+      "equation": "X/40",
+      "outputtype": "3"
+    },
+    {
+      "id": "fvjkwnfjvwsnvj",
+      "idhash": "0x387E266A",
+      "title": "1-2 Shift Time",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Seconds",
+      "packetoffset": "0x3D",
+      "sizeinbits": null,
+      "equation": "X/40",
+      "outputtype": "3"
+    },
+    {
+      "id": "vnsjvnwsjrvner",
+      "idhash": "0xB1A7EE84",
+      "title": "2-3 Shift Time",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Seconds",
+      "packetoffset": "0x3E",
+      "sizeinbits": null,
+      "equation": "X/40",
+      "outputtype": "3"
+    },
+    {
+      "id": "170",
+      "idhash": "0xCD52E53B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x01",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "171",
+      "idhash": "0xCD52EB7B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x02",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "172",
+      "idhash": "0xCD52F1DB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x03",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "173",
+      "idhash": "0xCD52EEDB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x04",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "174",
+      "idhash": "0xCD52ECDB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x05",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "175",
+      "idhash": "0xCD52FBBB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x06",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "176",
+      "idhash": "0xCD52F81B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x07",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "177",
+      "idhash": "0xCD52E25B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x08",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "178",
+      "idhash": "0xCD52EF1B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x09",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "179",
+      "idhash": "0xCD52F85B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x0A",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "180",
+      "idhash": "0xCD534D3B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x0B",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "181",
+      "idhash": "0xCD53437B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x0C",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "182",
+      "idhash": "0xCD5359DB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x0D",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "183",
+      "idhash": "0xCD5346DB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x0E",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "184",
+      "idhash": "0xCD5344DB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x0F",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "185",
+      "idhash": "0xCD5353BB",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x10",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    }
+  ],
+  "computed": [
+    {
+      "id": "1",
+      "idhash": "0x86F3549B",
+      "title": "Engine Run Time",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Seconds",
+      "packetoffset": "0x00",
+      "sizeinbits": "16",
+      "equation": "X",
+      "outputtype": "1"
+    },
+    {
+      "id": "2",
+      "idhash": "0x86F34E3B",
+      "title": "Engine Run Time",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Minutes",
+      "packetoffset": "0x00",
+      "sizeinbits": "16",
+      "equation": "X * 0.016667 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "3",
+      "idhash": "0x86F3513B",
+      "title": "Engine Run Time",
+      "parentcmdidhash": "0xE6B79C55",
+      "units": "Hours",
+      "packetoffset": "0x00",
+      "sizeinbits": "16",
+      "equation": "X * 0.000278 + 0.000000",
+      "outputtype": "3"
+    },
+    {
+      "id": "flowlbhr",
+      "idhash": "0x384246C2",
+      "title": "Fuel Flow in Lb/Hr",
+      "parentcmdidhash": null,
+      "units": "Lb/Hr",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "A*(1/3600000)*(17.4)*(3)*E*(60)*(1)",
+      "outputtype": "3"
+    },
+    {
+      "id": "galhrflow",
+      "idhash": "0xC4FAA70F",
+      "title": "Fuel Flow in Gal/Hr",
+      "parentcmdidhash": null,
+      "units": "Gal/Hr",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "A/6.073",
+      "outputtype": "3"
+    },
+    {
+      "id": "fueleconomy",
+      "idhash": "0x52707F96",
+      "title": "Fuel Economy",
+      "parentcmdidhash": null,
+      "units": "MPG",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "A/B",
+      "outputtype": "3"
+    },
+    {
+      "id": "injectdutycycl",
+      "idhash": "0x2CF4F036",
+      "title": "Injector Duty Cycle",
+      "parentcmdidhash": null,
+      "units": "%",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "(X*y)/1200",
+      "outputtype": "3"
+    },
+    {
+      "id": "ltftvakue",
+      "idhash": "0xA2CD7CC3",
+      "title": "LTFT",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "X/128",
+      "outputtype": "3"
+    },
+    {
+      "id": "stftvalue",
+      "idhash": "0xA29D9CC3",
+      "title": "STFT",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "X/128",
+      "outputtype": "3"
+    },
+    {
+      "id": "totalfueltrimv",
+      "idhash": "0xC85DFBAA",
+      "title": "Total Fuel Trim",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "(X+Y)-1",
+      "outputtype": "3"
+    },
+    {
+      "id": "fnjwnwjfvnm,wf",
+      "idhash": "0x707DB5C1",
+      "title": "HP Estimate",
+      "parentcmdidhash": null,
+      "units": "HP",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "(17.4*6*(A/100))/.5",
+      "outputtype": "3"
+    },
+    {
+      "id": "dcjklsdfnvkjnf",
+      "idhash": "0x2BF52463",
+      "title": "Uncorrected PW",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "(X-Y)-Z",
+      "outputtype": "3"
+    },
+    {
+      "id": "mfvf,vm,dfvm,s",
+      "idhash": "0xE2A0E5CE",
+      "title": "Offset due to Voltage",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "fnvjmwfnvmwnfv",
+      "idhash": "0x19EC0C18",
+      "title": "Offset due to low PW",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    },
+    {
+      "id": "rrbvjfvdfnvm,fn",
+      "idhash": "0x9E45F7C2",
+      "title": "Uncorrected injector DC",
+      "parentcmdidhash": null,
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "(X*y)/1200",
+      "outputtype": "3"
+    },
+    {
+      "id": "snfvjsdnfvjsvk",
+      "idhash": "0x9F97C288",
+      "title": "Torque Estimate",
+      "parentcmdidhash": null,
+      "units": "Lb-Ft",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "(X*5252)/Y",
+      "outputtype": "3"
+    },
+    {
+      "id": "169",
+      "idhash": "0xCD51B05B",
+      "title": null,
+      "parentcmdidhash": "0xE6901C55",
+      "units": "",
+      "packetoffset": "0x00",
+      "sizeinbits": null,
+      "equation": "X",
+      "outputtype": "3"
+    }
+  ]
+}
