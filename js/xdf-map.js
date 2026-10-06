@@ -9,6 +9,12 @@
  *       -> { patches: [{ table, address, sizeBytes, oldValue, newValue, deltaPct, rpm, map }],
  *            patched: Uint8Array|null }
  *
+ * - By default applyFuelSuggestions smooths the result: cells corrected from
+ *   trim data keep their full delta, and up to two rings of uncorrected
+ *   neighbors are tapered toward them (50%, 25%) so the table has no cliffs.
+ *   Pass { smooth: false } to restore raw per-cell patching, or custom
+ *   { rings: [{ radius, factor }] }. Buffer cells are flagged smoothed: true.
+ *
  * Notes:
  * - 68HC11 is big-endian; 16-bit table elements are read/written BE.
  * - patched binary is returned WITHOUT checksum correction — the P66 XDF
@@ -119,19 +125,73 @@
   }
 
   /**
+   * Build buffer rings around changed VE cells so the table has no cliffs
+   * between corrected and uncorrected cells. Only fills cells that had no
+   * suggestion of their own; targeted cells are never touched. Each ring
+   * tapers the mean of neighboring targeted deltas by its factor.
+   * rings: e.g. [{ radius: 1, factor: 0.5 }, { radius: 2, factor: 0.25 }]
+   */
+  function smoothDeltaGrid(deltaGrid, rows, cols, rings) {
+    var out = deltaGrid.map(function (row) { return row.slice(); });
+    rings.forEach(function (ring) {
+      var r = Math.max(1, ring.radius | 0);
+      var f = ring.factor;
+      for (var i = 0; i < rows; i++) {
+        for (var j = 0; j < cols; j++) {
+          if (deltaGrid[i][j] !== 0) continue; // never touch targeted cells
+          if (out[i][j] !== 0) continue;       // inner ring wins
+          var sum = 0, n = 0;
+          for (var di = -r; di <= r; di++) {
+            for (var dj = -r; dj <= r; dj++) {
+              if (!di && !dj) continue;
+              var ni = i + di, nj = j + dj;
+              if (ni < 0 || nj < 0 || ni >= rows || nj >= cols) continue;
+              if (deltaGrid[ni][nj] !== 0) { sum += deltaGrid[ni][nj]; n++; }
+            }
+          }
+          if (n > 0) out[i][j] = (sum / n) * f;
+        }
+      }
+    });
+    return out;
+  }
+
+  /**
    * Turn fuel suggestions into binary patches against the Main VE table.
    * Only suggestions with action !== 'none' and a nonzero delta produce patches.
+   *
+   * veTableName may be omitted in favor of an options object:
+   *   applyFuelSuggestions(catalog, bin, suggestions, { smooth: false })
+   * options.smooth (default true) tapers uncorrected neighbors around each
+   * corrected cell; options.rings overrides the default
+   * [{ radius: 1, factor: 0.5 }, { radius: 2, factor: 0.25 }].
    */
-  function applyFuelSuggestions(catalog, binBytes, suggestions, veTableName) {
+  function applyFuelSuggestions(catalog, binBytes, suggestions, veTableName, options) {
+    if (veTableName && typeof veTableName === 'object') {
+      options = veTableName;
+      veTableName = 'Main VE';
+    }
     veTableName = veTableName || 'Main VE';
+    options = options || {};
+    var smooth = options.smooth !== false;
+    var rings = options.rings || [{ radius: 1, factor: 0.5 }, { radius: 2, factor: 0.25 }];
+
     var ve = readTable(catalog, veTableName, binBytes);
     if (!ve) return { patches: [], patched: null, error: 'Main VE table not readable' };
     var eb = ve.elementBytes;
     var base = ve.base;
-    var patched = new Uint8Array(binBytes); // copy
-    var patches = [];
-    var seenAddr = {}; // dedupe: first (strongest-trim) suggestion wins per cell
+    var rows = ve.rows, cols = ve.cols;
+    var rpmBp = axisBreakpoints(ve.table.yAxis);
+    var mapBp = axisBreakpoints(ve.table.xAxis);
+    var maxRaw = eb === 2 ? 0xFFFF : 0xFF;
 
+    // 1. Delta grid from suggestions; first (strongest-trim) suggestion wins per cell.
+    var deltaGrid = [];
+    var metaGrid = [];
+    for (var r = 0; r < rows; r++) {
+      deltaGrid.push(new Array(cols).fill(0));
+      metaGrid.push(new Array(cols).fill(null));
+    }
     suggestions.forEach(function (s) {
       if (s.kind !== 'fuel' || s.action === 'none' || !s.deltaPct) return;
       // Recover the trim cell's bin labels from the suggestion's cell text:
@@ -140,25 +200,42 @@
       if (!m) return;
       var hits = mapTrimCellToVE({ rpmBin: m[1], mapBin: m[2] }, ve);
       hits.forEach(function (h) {
-        var addr = base + (h.row * ve.cols + h.col) * eb;
-        if (seenAddr[addr]) return;
-        seenAddr[addr] = true;
-        var oldValue = ve.values[h.row][h.col];
-        var newValue = Math.round(oldValue * (1 + s.deltaPct / 100));
+        if (metaGrid[h.row][h.col]) return;
+        metaGrid[h.row][h.col] = { confidence: s.confidence, rpm: h.rpm, map: h.map };
+        deltaGrid[h.row][h.col] = s.deltaPct;
+      });
+    });
+
+    // 2. Optional buffer rings around corrected cells.
+    var finalGrid = smooth ? smoothDeltaGrid(deltaGrid, rows, cols, rings) : deltaGrid;
+
+    // 3. Write patches.
+    var patched = new Uint8Array(binBytes); // copy
+    var patches = [];
+    for (var ri = 0; ri < rows; ri++) {
+      for (var ci = 0; ci < cols; ci++) {
+        var d = finalGrid[ri][ci];
+        if (!d) continue;
+        var addr = base + (ri * cols + ci) * eb;
+        var oldValue = ve.values[ri][ci];
+        var newValue = Math.min(maxRaw, Math.max(0, Math.round(oldValue * (1 + d / 100))));
         writeRaw(patched, addr, eb, newValue);
+        var meta = metaGrid[ri][ci];
         patches.push({
           table: veTableName,
           address: addr,
           addressHex: '0x' + addr.toString(16).toUpperCase(),
           sizeBytes: eb,
-          rpm: h.rpm, map: h.map,
+          rpm: meta ? meta.rpm : (rpmBp[ri] !== undefined ? rpmBp[ri] : null),
+          map: meta ? meta.map : (mapBp[ci] !== undefined ? mapBp[ci] : null),
           oldValue: oldValue,
-          newValue: Math.min(eb === 2 ? 0xFFFF : 0xFF, newValue),
-          deltaPct: s.deltaPct,
-          confidence: s.confidence
+          newValue: newValue,
+          deltaPct: Math.round(d * 100) / 100,
+          smoothed: !meta,
+          confidence: meta ? meta.confidence : null
         });
-      });
-    });
+      }
+    }
 
     return { patches: patches, patched: patched, error: null };
   }
