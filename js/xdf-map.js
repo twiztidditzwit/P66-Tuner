@@ -240,10 +240,142 @@
     return { patches: patches, patched: patched, error: null };
   }
 
+  /**
+   * Parse a linear spark-table MATH equation into raw units per degree.
+   * Supports X*(a/b), X*a, X/a, and bare X. Returns null when the
+   * equation is not a supported linear form — the caller must refuse
+   * to patch rather than guess the scaling.
+   */
+  function rawPerDegree(equation) {
+    var s = String(equation || '').replace(/\s+/g, '');
+    var m;
+    if ((m = /^X\*\(([\d.]+)\/([\d.]+)\)$/.exec(s))) {
+      var a = parseFloat(m[1]);
+      return a ? parseFloat(m[2]) / a : null; // deg = raw*(a/b) -> raw = deg*(b/a)
+    }
+    if ((m = /^X\*([\d.]+)$/.exec(s))) {
+      var f = parseFloat(m[1]);
+      return f ? 1 / f : null;
+    }
+    if ((m = /^X\/([\d.]+)$/.exec(s))) {
+      var d = parseFloat(m[1]);
+      return d ? d : null; // deg = raw/d -> raw = deg*d
+    }
+    if (s === 'X') return 1;
+    return null;
+  }
+
+  /**
+   * Map an { rpm, map } point to the nearest table cell by axis breakpoints.
+   * Returns { row, col } or null when the table has no usable axes.
+   */
+  function mapPointToTable(point, table) {
+    var rpmBp = axisBreakpoints(table.yAxis);
+    var mapBp = axisBreakpoints(table.xAxis);
+    if (!rpmBp.length || !mapBp.length) return null;
+    function nearest(bp, v) {
+      var best = 0, bestD = Math.abs(bp[0] - v);
+      for (var i = 1; i < bp.length; i++) {
+        var d = Math.abs(bp[i] - v);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    }
+    return { row: nearest(rpmBp, point.rpm), col: nearest(mapBp, point.map) };
+  }
+
+  /**
+   * Turn spark suggestions (knock retard) into binary patches against the
+   * Main Spark Advance table. Each suggestion's knockCells (RPM/MAP at each
+   * knock event's peak KR) map to their nearest spark cells; the degree
+   * pull is converted to raw units via the table's MATH equation.
+   *
+   * options.smooth (default true) tapers one ring of uncorrected neighbors
+   * at 50%; options.rings overrides. Only suggestions with
+   * action === 'retard timing' and a nonzero deltaDeg produce patches.
+   */
+  function applySparkSuggestions(catalog, binBytes, suggestions, sparkTableName, options) {
+    if (sparkTableName && typeof sparkTableName === 'object') {
+      options = sparkTableName;
+      sparkTableName = 'Main Spark Advance';
+    }
+    sparkTableName = sparkTableName || 'Main Spark Advance';
+    options = options || {};
+    var smooth = options.smooth !== false;
+    var rings = options.rings || [{ radius: 1, factor: 0.5 }];
+
+    var spark = readTable(catalog, sparkTableName, binBytes);
+    if (!spark) return { patches: [], patched: null, error: 'Spark table not readable' };
+    var rpd = rawPerDegree(spark.table.zAxis && spark.table.zAxis.equation);
+    if (rpd === null || !isFinite(rpd) || rpd <= 0) {
+      return { patches: [], patched: null, error: 'Unsupported spark equation "' + ((spark.table.zAxis && spark.table.zAxis.equation) || '') + '" — refusing to guess scaling' };
+    }
+    var eb = spark.elementBytes;
+    var base = spark.base;
+    var rows = spark.rows, cols = spark.cols;
+    var rpmBp = axisBreakpoints(spark.table.yAxis);
+    var mapBp = axisBreakpoints(spark.table.xAxis);
+    var maxRaw = eb === 2 ? 0xFFFF : 0xFF;
+
+    // Delta grid in raw units; first suggestion wins per cell.
+    var deltaGrid = [];
+    var metaGrid = [];
+    for (var r = 0; r < rows; r++) {
+      deltaGrid.push(new Array(cols).fill(0));
+      metaGrid.push(new Array(cols).fill(null));
+    }
+    suggestions.forEach(function (s) {
+      if (s.kind !== 'spark' || s.action !== 'retard timing' || !s.deltaDeg) return;
+      var rawDelta = Math.round(s.deltaDeg * rpd); // deltaDeg negative = retard
+      if (!rawDelta) return;
+      (s.knockCells || []).forEach(function (kc) {
+        var hit = mapPointToTable(kc, spark.table);
+        if (!hit) return;
+        if (metaGrid[hit.row][hit.col]) return;
+        metaGrid[hit.row][hit.col] = { confidence: s.confidence, rpm: kc.rpm, map: kc.map };
+        deltaGrid[hit.row][hit.col] = rawDelta;
+      });
+    });
+
+    var finalGrid = smooth ? smoothDeltaGrid(deltaGrid, rows, cols, rings) : deltaGrid;
+
+    var patched = new Uint8Array(binBytes); // copy
+    var patches = [];
+    for (var ri = 0; ri < rows; ri++) {
+      for (var ci = 0; ci < cols; ci++) {
+        var d = finalGrid[ri][ci];
+        if (!d) continue;
+        var addr = base + (ri * cols + ci) * eb;
+        var oldValue = spark.values[ri][ci];
+        var newValue = Math.min(maxRaw, Math.max(0, Math.round(oldValue + d)));
+        if (newValue === oldValue) continue;
+        writeRaw(patched, addr, eb, newValue);
+        var meta = metaGrid[ri][ci];
+        patches.push({
+          table: sparkTableName,
+          address: addr,
+          addressHex: '0x' + addr.toString(16).toUpperCase(),
+          sizeBytes: eb,
+          rpm: meta ? meta.rpm : (rpmBp[ri] !== undefined ? rpmBp[ri] : null),
+          map: meta ? meta.map : (mapBp[ci] !== undefined ? mapBp[ci] : null),
+          oldValue: oldValue,
+          newValue: newValue,
+          deltaDeg: Math.round((newValue - oldValue) / rpd * 100) / 100,
+          smoothed: !meta,
+          confidence: meta ? meta.confidence : null
+        });
+      }
+    }
+
+    return { patches: patches, patched: patched, error: null };
+  }
+
   P66.findTable = findTable;
   P66.readTable = readTable;
   P66.mapTrimCellToVE = mapTrimCellToVE;
   P66.applyFuelSuggestions = applyFuelSuggestions;
+  P66.applySparkSuggestions = applySparkSuggestions;
+  P66.rawPerDegree = rawPerDegree;
 
   /* ---------- XDF XML parsing (browser + node) ---------- */
 

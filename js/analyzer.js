@@ -145,6 +145,8 @@
   function analyzeKnock(rows, mapResult) {
     var krCol = P66.columnFor(mapResult, 'KR');
     var tpsCol = P66.columnFor(mapResult, 'TPS');
+    var rpmCol = P66.columnFor(mapResult, 'RPM');
+    var mapCol = P66.columnFor(mapResult, 'MAP');
     if (!krCol) return { available: false, reason: 'Need KR (knock retard) channel.' };
 
     // Group consecutive KR-active rows into events.
@@ -162,7 +164,12 @@
         cur.endIdx = i;
         cur.samples++;
         cur.sumKR += kr;
-        if (kr > cur.peakKR) cur.peakKR = kr;
+        if (kr > cur.peakKR) {
+          cur.peakKR = kr;
+          // Position of the worst knock: what the spark patcher retards.
+          cur.peakRpm = rpmCol !== null ? num(row[rpmCol]) : null;
+          cur.peakMap = mapCol !== null ? num(row[mapCol]) : null;
+        }
         var region = row._region || 'cruise';
         cur.regions[region] = (cur.regions[region] || 0) + 1;
         cur.tpsEnd = tpsCol ? num(row[tpsCol]) : null;
@@ -210,6 +217,8 @@
         return {
           startIdx: e.startIdx, samples: e.samples, region: e.region,
           peakKR: round2(e.peakKR), avgKR: round2(e.avgKR),
+          rpm: e.peakRpm !== null && e.peakRpm !== undefined ? round2(e.peakRpm) : null,
+          map: e.peakMap !== null && e.peakMap !== undefined ? round2(e.peakMap) : null,
           tpsDrop: e.tpsDrop === null ? null : round2(e.tpsDrop)
         };
       })

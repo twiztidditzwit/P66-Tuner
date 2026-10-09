@@ -117,5 +117,37 @@ foreign.deftitle = 'Some Other XDF';
 var v9b = P66.verifyPatches(foreign, stockBin, ov);
 check('no stale warning for foreign XDF', !hasCheck(v9b, 'warnings', 'overlap'));
 
+console.log('10. spark patches: knock retard via equation scaling');
+function sparkSug() {
+  return [{ kind: 'spark', table: 'Spark Advance', cell: 'cruise region', action: 'retard timing',
+            deltaDeg: -2, confidence: 'high', samples: 50, knockCells: [{ rpm: 3000, map: 83 }] }];
+}
+check('rawPerDegree X*(90/255)', P66.rawPerDegree('X*(90/255)') === 255 / 90);
+check('rawPerDegree X*0.5', P66.rawPerDegree('X*0.5') === 2);
+check('rawPerDegree X/2', P66.rawPerDegree('X/2') === 2);
+check('rawPerDegree X', P66.rawPerDegree('X') === 1);
+check('rawPerDegree garbage', P66.rawPerDegree('X*X+1') === null);
+var spr = P66.applySparkSuggestions(catalog, stockBin, sparkSug());
+check('spark patches generated', spr.patches.length > 0, 'got ' + spr.patches.length);
+check('no spark error', !spr.error, spr.error);
+var targeted = spr.patches.filter(function (p) { return !p.smoothed; });
+check('targeted cell retarded by round(-2*255/90)=-6 raw',
+  targeted.length > 0 && targeted[0].newValue === targeted[0].oldValue - 6,
+  targeted.length ? (targeted[0].oldValue + '->' + targeted[0].newValue) : 'none');
+var vs = P66.verifyPatches(catalog, stockBin, spr);
+check('spark verification passes', vs.ok === true, JSON.stringify(vs.failures));
+
+console.log('11. spark refuses unsupported equation');
+var badEq = JSON.parse(JSON.stringify(catalog));
+badEq.tables.forEach(function (t) { if (t.title === 'Main Spark Advance') t.zAxis.equation = 'X*X+1'; });
+var sprBad = P66.applySparkSuggestions(badEq, stockBin, sparkSug());
+check('error returned', !!sprBad.error && /Unsupported spark equation/.test(sprBad.error), sprBad.error);
+check('no patches emitted', sprBad.patches.length === 0);
+
+console.log('12. spark action none -> no patches');
+var sprNone = P66.applySparkSuggestions(catalog, stockBin,
+  [{ kind: 'spark', action: 'none', deltaDeg: 0, knockCells: [{ rpm: 3000, map: 83 }] }]);
+check('no patches', sprNone.patches.length === 0 && !sprNone.error);
+
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nALL TESTS PASSED');
 process.exit(failures ? 1 : 0);

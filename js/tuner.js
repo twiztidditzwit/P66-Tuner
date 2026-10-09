@@ -148,10 +148,18 @@
     var pull = round2(clamp(medianPeak, 0.5, gates.maxSparkDeltaDeg));
     var tipOut = regionEvents.some(function (e) { return e.tpsDrop !== null && e.tpsDrop > 10; });
     var singleSpike = regionEvents.length === 1 && regionEvents[0].samples === 1;
+    // Knock cell positions (RPM/MAP at each event's peak KR) for the patcher.
+    var knockCells = [];
+    regionEvents.forEach(function (e) {
+      if (e.rpm !== null && e.rpm !== undefined && e.map !== null && e.map !== undefined) {
+        knockCells.push({ rpm: e.rpm, map: e.map, peakKR: e.peakKR });
+      }
+    });
     out.push({
       kind: 'spark', table: 'Spark Advance', cell: targetRegion + ' region',
       action: singleSpike ? 'none' : 'retard timing',
       deltaDeg: singleSpike ? 0 : -pull,
+      knockCells: knockCells,
       reason: knockReport.knockEvents + ' knock event(s), ' + knockReport.knockSamples +
         ' samples (' + knockReport.knockPct + '% of log) in ' + targetRegion +
         '; median event peak ' + medianPeak + '°, max ' + knockReport.maxKR + '°.' +
