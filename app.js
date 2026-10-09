@@ -347,8 +347,39 @@
         if (patchResult.error) {
           html += '<p class="status-warn">Binary patching unavailable: ' + esc(patchResult.error) + '</p>';
         } else if (patchResult.patches.length) {
-          lastPatches = patchResult;
-          html += '<h3>Binary Patches (Main VE)</h3>';
+          // Reliability gate: verify every patch against the source binary
+          // and catalog before the patched binary is offered for download.
+          var verification = null;
+          try {
+            verification = (typeof P66.verifyPatches === 'function')
+              ? P66.verifyPatches(xdfCatalog, binBytes, patchResult)
+              : { ok: false, checked: 0, failures: [{ addressHex: null, check: 'missing', message: 'Verifier not loaded (js/verify.js).' }], warnings: [] };
+          } catch (verr) {
+            verification = { ok: false, checked: 0, failures: [{ addressHex: null, check: 'exception', message: 'Verifier threw: ' + (verr && verr.message ? verr.message : verr) }], warnings: [] };
+          }
+          if (!verification.ok) {
+            lastPatches = null;
+            html += '<h3>Binary Patches (Main VE) — verification FAILED</h3>';
+            html += '<p class="status-warn"><strong>' + verification.failures.length +
+              ' check(s) failed on ' + verification.checked + ' patch(es). The patched binary is NOT offered for download.</strong></p>';
+            html += '<ul>';
+            verification.failures.forEach(function (f) {
+              html += '<li><strong>' + esc(f.addressHex || '—') + ' [' + esc(f.check) + ']:</strong> ' + esc(f.message) + '</li>';
+            });
+            html += '</ul>';
+          } else {
+            lastPatches = patchResult;
+            html += '<h3>Binary Patches (Main VE)</h3>';
+            html += '<p class="status-ok"><strong>Verification passed:</strong> ' + verification.checked +
+              ' patch(es) — addresses in range and inside the table\'s XDF region, ' +
+              'old values match the source binary, no conflicting writes, read-back OK.</p>';
+            if (verification.warnings.length) {
+              html += '<ul>';
+              verification.warnings.forEach(function (w) {
+                html += '<li class="status-warn"><strong>' + esc(w.addressHex) + ' [' + esc(w.check) + ']:</strong> ' + esc(w.message) + '</li>';
+              });
+              html += '</ul>';
+            }
           html += '<table><thead><tr><th>Address</th><th>Cell</th><th>Old</th><th>New</th><th>Δ</th></tr></thead><tbody>';
           patchResult.patches.forEach(function (p) {
             html += '<tr><td>' + esc(p.addressHex) + '</td>' +
@@ -363,6 +394,7 @@
             'validates on the stock binary, and community practice is to flash P66 bins ' +
             'without manual checksum correction. Bench-verify on a spare PCM before ' +
             'flashing a running vehicle.</p>';
+          }
         } else {
           html += '<p class="muted">No fuel patches applied (no actionable fuel suggestions).</p>';
         }
