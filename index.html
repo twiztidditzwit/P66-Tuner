@@ -10,9 +10,43 @@
     <header class="topbar">
       <h1>P66 Log Analyzer</h1>
       <p>16184737 P66 PCM — drop in a TunerPro log, get an analyzed bin out</p>
+      <div class="mode-toggle" role="group" aria-label="Interface mode">
+        <button id="mode-easy-btn" class="mode-btn" type="button">Easy</button>
+        <button id="mode-advanced-btn" class="mode-btn" type="button">Advanced</button>
+      </div>
     </header>
 
     <main class="container">
+      <section class="card grid-span-2" id="easy-wizard">
+        <h2>Make my tune — 3 steps</h2>
+        <p class="muted">P66 table definitions are built in. Just bring your TunerPro log and your stock binary.</p>
+        <div class="steps">
+          <div class="step" id="estep-1">
+            <h3><span class="step-n">1</span> Your log <span class="step-status" id="estep-1-status"></span></h3>
+            <label class="dropzone" for="easy-log-input">
+              <span>Drop your TunerPro log here</span>
+              <small>.csv / .tsv</small>
+              <input id="easy-log-input" type="file" accept=".csv,.tsv,.txt" />
+            </label>
+            <div id="easy-log-info" class="step-info"></div>
+          </div>
+          <div class="step" id="estep-2">
+            <h3><span class="step-n">2</span> Your stock binary <span class="step-status" id="estep-2-status"></span></h3>
+            <label class="dropzone" for="easy-bin-input">
+              <span>Drop your stock .bin read here</span>
+              <small>.bin — 64KB P66 read</small>
+              <input id="easy-bin-input" type="file" accept=".bin" />
+            </label>
+            <div id="easy-bin-info" class="step-info"></div>
+          </div>
+          <div class="step" id="estep-3">
+            <h3><span class="step-n">3</span> Your tune <span class="step-status" id="estep-3-status"></span></h3>
+            <p class="muted">Always uses the safest settings. Nothing is flashed — you get a file to review.</p>
+            <p><button id="easy-build-btn" disabled style="width:auto;padding:0.6rem 1.4rem;">Build my tune</button></p>
+            <div id="easy-results" class="step-info"></div>
+          </div>
+        </div>
+      </section>
       <section class="card grid-span-2">
         <h2>1) Load Definition Files</h2>
         <p class="muted">Upload or drop your core definition files to start a session.</p>
@@ -137,6 +171,10 @@
       </section>
     </main>
 
+    <footer class="container">
+      <p class="muted credit">Table definitions derived from Robert Saar's P66 V6 XDF. No checksum is defined for the P66 — bench-verify on a spare PCM before flashing a vehicle.</p>
+    </footer>
+
     <script src="js/log-parser.js"></script>
     <script src="js/channel-mapper.js"></script>
     <script src="js/analyzer.js"></script>
@@ -147,6 +185,8 @@
     <script src="js/fingerprints.js"></script>
     <script src="js/safety.js"></script>
     <script src="js/summary.js"></script>
+    <script src="js/bundled-catalog.js"></script>
+    <script src="js/easy.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

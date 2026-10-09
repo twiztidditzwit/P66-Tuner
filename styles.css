@@ -258,3 +258,92 @@ pre {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- Easy / Advanced mode ---- */
+.mode-toggle {
+  display: inline-flex;
+  margin-top: 0.75rem;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.45rem 1.25rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.mode-btn.active {
+  background: var(--accent);
+  color: #0b0e13;
+  font-weight: 600;
+}
+body[data-ui-mode="easy"] main .card:not(#easy-wizard) {
+  display: none;
+}
+body[data-ui-mode="advanced"] #easy-wizard {
+  display: none;
+}
+
+/* ---- Easy wizard ---- */
+.steps {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+.step {
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 1rem;
+  background: #141a23;
+}
+.step h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+.step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--card-border);
+  font-size: 0.9rem;
+  margin-right: 0.4rem;
+}
+.step.done .step-n {
+  background: var(--ok);
+  color: #0b0e13;
+}
+.step-status {
+  font-size: 0.9rem;
+  margin-left: 0.5rem;
+}
+.step.done .step-status::after {
+  content: "✓ done";
+  color: var(--ok);
+}
+.step-info {
+  margin-top: 0.75rem;
+}
+.step-info ul {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+.checklist {
+  list-style: none;
+  padding-left: 0;
+}
+.checklist li {
+  margin: 0.35rem 0;
+}
+.credit {
+  font-size: 0.8rem;
+}
+footer.container {
+  display: block;
+  padding-bottom: 2rem;
+}
