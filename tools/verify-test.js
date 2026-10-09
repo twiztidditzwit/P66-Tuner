@@ -149,5 +149,54 @@ var sprNone = P66.applySparkSuggestions(catalog, stockBin,
   [{ kind: 'spark', action: 'none', deltaDeg: 0, knockCells: [{ rpm: 3000, map: 83 }] }]);
 check('no patches', sprNone.patches.length === 0 && !sprNone.error);
 
+console.log('13. safety guard: stock bin recognized');
+require(path.join(ROOT, 'js', 'fingerprints.js'));
+require(path.join(ROOT, 'js', 'safety.js'));
+require(path.join(ROOT, 'js', 'summary.js'));
+var g1 = P66.checkBinary(stockBin);
+check('stock bin level ok', g1.level === 'ok', g1.level);
+check('matched a known cal', ['16203271', '16203281', '16212294', '16212604', '16212614'].indexOf(g1.matchedCal) !== -1, g1.matchedCal);
+check('matchPct high', g1.matchPct >= 99, String(g1.matchPct));
+
+console.log('14. safety guard: Dale bin (custom ID stamp) still recognized by fingerprint');
+var dalesBin = new Uint8Array(fs.readFileSync('/home/hatch/workspace/user/files/firstread1995camarol32.bin'));
+var g2 = P66.checkBinary(dalesBin);
+check('Dale bin level ok', g2.level === 'ok', g2.level + ' ' + g2.messages.join(' ').slice(0, 80));
+
+console.log('15. safety guard: tampered and garbage binaries');
+function tamperAt(bin, count) {
+  var out = new Uint8Array(bin);
+  var fp = P66.FINGERPRINT;
+  var done = 0;
+  for (var s = 0; s < 100000 && done < count; s++) {
+    var off = s * fp.stride;
+    if (off >= out.length) break;
+    if (fp.skip.some(function (r) { return off >= r[0] && off < r[1]; })) continue;
+    out[off] ^= 0xFF; done++;
+  }
+  return out;
+}
+var g3 = P66.checkBinary(tamperAt(stockBin, 12)); // ~95% match
+check('lightly modified bin warns', g3.level === 'warn', g3.level + ' ' + g3.matchPct + '%');
+var g4 = P66.checkBinary(tamperAt(stockBin, 80)); // ~70% match
+check('heavily modified bin blocked', g4.level === 'block', g4.level + ' ' + g4.matchPct + '%');
+var g5 = P66.checkBinary(new Uint8Array(100));
+check('wrong size blocked', g5.level === 'block', g5.level);
+var g6 = P66.checkBinary(new Uint8Array(65536).fill(0xFF));
+check('empty image blocked', g6.level === 'block', g6.level);
+
+console.log('16. plain-English summary');
+var sum = P66.summarizeTune(
+  [{ kind: 'fuel', action: 'add fuel', deltaPct: 6, cell: '2000-2800 RPM / 80-100 kPa', confidence: 'high' },
+   { kind: 'spark', action: 'retard timing', deltaDeg: -2, cell: 'cruise region', confidence: 'high',
+     knockCells: [{ rpm: 2972, map: 84.5 }] }],
+  [{}, {}, {}]);
+check('headline mentions changes', /2 kinds? of change|kind of change/.test(sum.headline), sum.headline);
+check('fuel bullet plain', sum.bullets.some(function (b) { return /running lean/.test(b) && /RPM/.test(b); }), sum.bullets[0] || 'none');
+check('spark bullet plain', sum.bullets.some(function (b) { return /knocking \(pinging\)/.test(b); }), sum.bullets[1] || 'none');
+check('no jargon leak', !/deltaPct|BLM|VE\/MAF/.test(sum.bullets.join(' ')), sum.bullets.join(' | ').slice(0, 120));
+var sumEmpty = P66.summarizeTune([], []);
+check('empty summary honest', /No changes/.test(sumEmpty.headline), sumEmpty.headline);
+
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nALL TESTS PASSED');
 process.exit(failures ? 1 : 0);

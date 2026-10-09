@@ -341,7 +341,26 @@
 
     // Concrete binary patches when XDF + BIN are loaded.
     lastPatches = null;
+    var allPatches = [];
+    var finalImage = null;
     if (xdfCatalog && binBytes) {
+      // Safety gate: confirm the binary is a genuine P66 image before
+      // generating any patch. Strangers will use this tool — never patch
+      // a file we cannot identify.
+      var binGuard = (typeof P66.checkBinary === 'function')
+        ? P66.checkBinary(binBytes)
+        : { level: 'block', calId: null, matchedCal: null, matchPct: 0, messages: ['Safety guard not loaded (js/safety.js + js/fingerprints.js).'] };
+      if (binGuard.level === 'block') {
+        html += '<h3>Binary Patches — blocked</h3>';
+        html += '<p class="status-warn"><strong>Patching is blocked for your safety.</strong> No changes were generated and no binary is offered.</p><ul>';
+        binGuard.messages.forEach(function (m) { html += '<li>' + esc(m) + '</li>'; });
+        html += '</ul>';
+      } else {
+      if (binGuard.level === 'warn') {
+        html += '<p class="status-warn"><strong>Binary warning:</strong> ' + esc(binGuard.messages.join(' ')) + '</p>';
+      } else {
+        html += '<p class="status-ok">' + esc(binGuard.messages.join(' ')) + '</p>';
+      }
       try {
         var patchResult = P66.applyFuelSuggestions(xdfCatalog, binBytes, result.actionable);
         // Spark patches apply on top of the fuel-patched image so the final
@@ -404,6 +423,8 @@
           });
           html += '</tbody></table>';
           html += '<p><button id="download-bin-btn" style="width:auto;padding:0.55rem 1.2rem;">Download patched binary</button></p>';
+          html += '<p class="status-warn"><strong>Before you flash:</strong> save a backup copy of your ORIGINAL binary somewhere safe — ' +
+            'if anything behaves unexpectedly you will need it to go back.</p>';
           html += '<p class="status-warn"><strong>Checksum status: none found.</strong> ' +
             'No checksum definition exists in the P66 XDF, no common GM checksum scheme ' +
             'validates on the stock binary, and community practice is to flash P66 bins ' +
@@ -416,8 +437,22 @@
       } catch (err) {
         html += '<p class="status-warn">Patch generation failed: ' + esc(err && err.message ? err.message : err) + '</p>';
       }
+      } // end safety-guard else (binGuard.level !== 'block')
     } else {
       html += '<p class="muted">Load an XDF + stock binary to get concrete binary patches.</p>';
+    }
+
+    // Plain-English summary first: nobody should flash a binary they
+    // cannot describe in their own words.
+    if (typeof P66.summarizeTune === 'function') {
+      var tuneSummary = P66.summarizeTune(result.actionable, allPatches);
+      var sh = '<h3>What this tune does</h3><p><strong>' + esc(tuneSummary.headline) + '</strong></p>';
+      if (tuneSummary.bullets.length) {
+        sh += '<ul>';
+        tuneSummary.bullets.forEach(function (b) { sh += '<li>' + esc(b) + '</li>'; });
+        sh += '</ul>';
+      }
+      html = sh + html;
     }
 
     tuneResults.innerHTML = html;
