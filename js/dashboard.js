@@ -265,7 +265,7 @@
     legend.className = 'chart-legend muted';
     legend.innerHTML =
       '<span class="swatch" style="background:#58a6ff"></span> commanded ' +
-      '<span class="swatch" style="background:#d29922"></span> wideband ' +
+      '<span class="swatch" style="background:#d29922"></span> measured ' +
       '(' + cmd.length + ' samples' + (cmd.length > MAXP ? ', downsampled' : '') + ')';
     container.appendChild(legend);
   }

@@ -198,7 +198,8 @@
       kind: 'pe', table: 'Power Enrichment', cell: 'WOT',
       action: 'enrich', deltaPct: delta,
       reason: 'WOT avg lambda error ' + wot.avgAbsError + ' over ' + wot.samples +
-        ' samples (target within ' + gates.lambdaThreshold + '). Verify on wideband after change.',
+        ' samples (target within ' + gates.lambdaThreshold + '). After flashing, log another WOT pull and ' +
+        'confirm the narrowband O2 sensor reads solidly rich at full throttle.',
       confidence: 'medium', samples: wot.samples
     });
     return out;

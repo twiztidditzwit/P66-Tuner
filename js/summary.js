@@ -77,7 +77,8 @@
 
     pe.forEach(function (s) {
       bullets.push('Full throttle: the air/fuel mixture was off at wide-open throttle. This tune enriches it by about ' +
-        Math.abs(s.deltaPct) + '%. Verify with a wideband gauge if you have one.');
+        Math.abs(s.deltaPct) + '%. After flashing, log another full-throttle pull and check the O2 sensor ' +
+        'reads solidly rich up top — if it still looks lean, do not keep pushing it.');
     });
 
     var n = (patches || []).length;

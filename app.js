@@ -255,7 +255,7 @@
 
     // Lambda
     var l = report.lambda;
-    html += '<h3>Commanded vs Wideband Lambda</h3>';
+    html += '<h3>Commanded vs Measured Lambda</h3>';
     if (l.available) {
       var lcls = l.meanAbsError <= 0.03 ? 'status-ok' : 'status-warn';
       html += '<p class="' + lcls + '">Mean abs error ' + l.meanAbsError + ' λ, ' +
