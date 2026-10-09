@@ -50,9 +50,8 @@
     if (typeof find !== 'function') return null;
     var t = find(catalog, tableName);
     if (!t || t.address === '' || t.address === undefined) return null;
-    var rows = parseInt(t.rows, 10) || 0;
-    var cols = parseInt(t.cols, 10) || 0;
-    if (!rows || !cols) return null;
+    var rows = parseInt(t.rows, 10) || 1;
+    var cols = parseInt(t.cols, 10) || 1;
     var bits = parseInt(t.elementSizeBits || '8', 10) || 8;
     var eb = bits === 16 ? 2 : 1;
     var base = parseAddr(t.address);

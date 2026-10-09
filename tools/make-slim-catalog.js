@@ -17,7 +17,7 @@ var fs = require('fs');
 var path = require('path');
 var ROOT = path.join(__dirname, '..');
 
-var WANT = ['Main VE', 'Main Spark Advance'];
+var WANT = ['Main VE', 'Main Spark Advance', 'Power Enrichment Target AFR'];
 
 var full = JSON.parse(fs.readFileSync(path.join(ROOT, 'defs', 'xdf', 'p66-v6-34l.catalog.json'), 'utf8'));
 
@@ -55,7 +55,7 @@ var slim = {
 var lines = [
   '/* P66 bundled table definitions — GENERATED, do not edit.',
   ' * Built by tools/make-slim-catalog.js from defs/xdf/p66-v6-34l.catalog.json.',
-  ' * Contains only the tables the patchers need: Main VE, Main Spark Advance.',
+  ' * Contains only the tables the patchers need: Main VE, Main Spark Advance, Power Enrichment Target AFR.',
   ' * Table definitions derived from Robert Saar\'s P66 V6 XDF.',
   ' */',
   '(function (global) {',

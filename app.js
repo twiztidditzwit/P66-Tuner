@@ -363,19 +363,24 @@
       }
       try {
         var patchResult = P66.applyFuelSuggestions(xdfCatalog, binBytes, result.actionable);
-        // Spark patches apply on top of the fuel-patched image so the final
-        // binary carries both. Fuel only touches the VE region, so spark
-        // old-values read from the fuel-patched image still match the source.
+        // Each stage patches on top of the previous stage's image so the
+        // final binary carries everything. Stages touch disjoint regions,
+        // so old-values read downstream still match the source binary.
         var sparkBase = (patchResult.patched && !patchResult.error) ? patchResult.patched : binBytes;
         var sparkResult = (typeof P66.applySparkSuggestions === 'function')
           ? P66.applySparkSuggestions(xdfCatalog, sparkBase, result.actionable)
           : { patches: [], patched: null, error: 'Spark patcher not loaded (js/xdf-map.js).' };
-        var allPatches = (patchResult.patches || []).concat(sparkResult.patches || []);
-        var finalImage = sparkResult.patched || patchResult.patched;
-        if (patchResult.error && sparkResult.error) {
-          html += '<p class="status-warn">Binary patching unavailable: ' + esc(patchResult.error) + ' / ' + esc(sparkResult.error) + '</p>';
-        } else if (patchResult.error || sparkResult.error) {
-          html += '<p class="status-warn">Partial patching: ' + esc(patchResult.error || sparkResult.error) + '</p>';
+        var peBase = (sparkResult.patched && !sparkResult.error) ? sparkResult.patched : sparkBase;
+        var peResult = (typeof P66.applyPeSuggestions === 'function')
+          ? P66.applyPeSuggestions(xdfCatalog, peBase, result.actionable)
+          : { patches: [], patched: null, error: 'PE patcher not loaded (js/xdf-map.js).' };
+        var allPatches = (patchResult.patches || []).concat(sparkResult.patches || [], peResult.patches || []);
+        var finalImage = peResult.patched || sparkResult.patched || patchResult.patched;
+        var patchErrors = [patchResult.error, sparkResult.error, peResult.error].filter(function (e) { return !!e; });
+        if (allPatches.length === 0 && patchErrors.length) {
+          html += '<p class="status-warn">Binary patching unavailable: ' + esc(patchErrors.join(' / ')) + '</p>';
+        } else if (patchErrors.length) {
+          html += '<p class="status-warn">Partial patching: ' + esc(patchErrors.join(' / ')) + '</p>';
         }
         if (allPatches.length) {
           // Reliability gate: verify every patch against the source binary
@@ -413,9 +418,10 @@
             }
           html += '<table><thead><tr><th>Table</th><th>Address</th><th>Cell</th><th>Old</th><th>New</th><th>Δ</th></tr></thead><tbody>';
           allPatches.forEach(function (p) {
-            var delta = (p.deltaDeg !== undefined && p.deltaDeg !== null)
-              ? p.deltaDeg + '°'
-              : (p.deltaPct > 0 ? '+' : '') + p.deltaPct + '%';
+            var delta;
+            if (p.deltaAfrPct !== undefined && p.deltaAfrPct !== null) delta = p.deltaAfrPct + '% AFR';
+            else if (p.deltaDeg !== undefined && p.deltaDeg !== null) delta = p.deltaDeg + '°';
+            else delta = (p.deltaPct > 0 ? '+' : '') + p.deltaPct + '%';
             html += '<tr><td>' + esc(p.table) + '</td><td>' + esc(p.addressHex) + '</td>' +
               '<td>' + p.rpm + ' RPM / ' + p.map + ' kPa' + (p.smoothed ? ' (smoothed)' : '') + '</td>' +
               '<td>' + p.oldValue + '</td><td>' + p.newValue + '</td>' +
@@ -432,7 +438,7 @@
             'flashing a running vehicle.</p>';
           }
         } else {
-          html += '<p class="muted">No patches applied (no actionable fuel or spark suggestions).</p>';
+          html += '<p class="muted">No patches applied (no actionable fuel, spark, or PE suggestions).</p>';
         }
       } catch (err) {
         html += '<p class="status-warn">Patch generation failed: ' + esc(err && err.message ? err.message : err) + '</p>';

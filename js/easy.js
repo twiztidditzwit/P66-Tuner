@@ -176,8 +176,12 @@
     var spark = (typeof P66.applySparkSuggestions === 'function')
       ? P66.applySparkSuggestions(catalog, sparkBase, sug.actionable)
       : { patches: [], patched: null, error: null };
-    var allPatches = (fuel.patches || []).concat(spark.patches || []);
-    var finalImage = spark.patched || fuel.patched;
+    var peBase = (spark.patched && !spark.error) ? spark.patched : sparkBase;
+    var pe = (typeof P66.applyPeSuggestions === 'function')
+      ? P66.applyPeSuggestions(catalog, peBase, sug.actionable)
+      : { patches: [], patched: null, error: null };
+    var allPatches = (fuel.patches || []).concat(spark.patches || [], pe.patches || []);
+    var finalImage = pe.patched || spark.patched || fuel.patched;
 
     var verification = (typeof P66.verifyPatches === 'function')
       ? P66.verifyPatches(catalog, binBytes, { patches: allPatches, patched: finalImage, error: null })

@@ -198,5 +198,29 @@ check('no jargon leak', !/deltaPct|BLM|VE\/MAF/.test(sum.bullets.join(' ')), sum
 var sumEmpty = P66.summarizeTune([], []);
 check('empty summary honest', /No changes/.test(sumEmpty.headline), sumEmpty.headline);
 
+console.log('17. PE patches: enrich lowers target AFR');
+function peSug() {
+  return [{ kind: 'pe', table: 'Power Enrichment', cell: 'WOT', action: 'enrich', deltaPct: 4, confidence: 'medium', samples: 60 }];
+}
+var per = P66.applyPeSuggestions(catalog, stockBin, peSug());
+check('17 PE patches (full table)', per.patches.length === 17, 'got ' + per.patches.length);
+check('no PE error', !per.error, per.error);
+check('all enrich (new < old)', per.patches.every(function (p) { return p.newValue < p.oldValue; }));
+var p0 = per.patches[0];
+check('math: new = round(old * 0.96)', p0.newValue === Math.round(p0.oldValue * 0.96), p0.oldValue + '->' + p0.newValue);
+var vpe = P66.verifyPatches(catalog, stockBin, per);
+check('PE verification passes', vpe.ok === true, JSON.stringify(vpe.failures));
+
+console.log('18. PE refuses unsupported equation');
+var badPe = JSON.parse(JSON.stringify(catalog));
+badPe.tables.forEach(function (t) { if (t.title === 'Power Enrichment Target AFR') t.zAxis.equation = 'X*X'; });
+var perBad = P66.applyPeSuggestions(badPe, stockBin, peSug());
+check('error returned', !!perBad.error && /Unsupported PE equation/.test(perBad.error), perBad.error);
+check('no patches emitted', perBad.patches.length === 0);
+
+console.log('19. PE action none -> no patches');
+var perNone = P66.applyPeSuggestions(catalog, stockBin, [{ kind: 'pe', action: 'none', deltaPct: 0 }]);
+check('no patches', perNone.patches.length === 0 && !perNone.error);
+
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nALL TESTS PASSED');
 process.exit(failures ? 1 : 0);

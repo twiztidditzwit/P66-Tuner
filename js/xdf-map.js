@@ -74,20 +74,23 @@
    */
   function readTable(catalog, name, binBytes) {
     var t = findTable(catalog, name);
-    if (!t || !t.address || !t.rows || !t.cols) return null;
+    if (!t || !t.address) return null;
+    // 1D tables may omit cols (or rows); default the missing dim to 1.
+    var rows = parseInt(t.rows, 10) || 1;
+    var cols = parseInt(t.cols, 10) || 1;
     var base = parseAddr(t.address);
     var eb = elementBytes(t);
     var values = [];
-    for (var r = 0; r < t.rows; r++) {
+    for (var r = 0; r < rows; r++) {
       var row = [];
-      for (var c = 0; c < t.cols; c++) {
-        var addr = base + (r * t.cols + c) * eb;
+      for (var c = 0; c < cols; c++) {
+        var addr = base + (r * cols + c) * eb;
         if (addr + eb > binBytes.length) return null;
         row.push(readRaw(binBytes, addr, eb));
       }
       values.push(row);
     }
-    return { table: t, rows: t.rows, cols: t.cols, values: values, elementBytes: eb, base: base };
+    return { table: t, rows: rows, cols: cols, values: values, elementBytes: eb, base: base };
   }
 
   function axisBreakpoints(axis) {
@@ -370,11 +373,78 @@
     return { patches: patches, patched: patched, error: null };
   }
 
+  /**
+   * Turn power-enrichment suggestions into binary patches against the
+   * Power Enrichment Target AFR table. The suggestion is WOT-global, and
+   * so is the table (target AFR vs RPM) — the enrichment applies uniformly
+   * to every cell. Enriching lowers the AFR target:
+   * newRaw = round(oldRaw * (1 - deltaPct/100)).
+   *
+   * The table's MATH equation must be a supported linear form (see
+   * rawPerDegree); anything else refuses rather than guessing the scaling.
+   * Only suggestions with action === 'enrich' and a nonzero deltaPct
+   * produce patches.
+   */
+  function applyPeSuggestions(catalog, binBytes, suggestions, peTableName, options) {
+    if (peTableName && typeof peTableName === 'object') {
+      options = peTableName;
+      peTableName = 'Power Enrichment Target AFR';
+    }
+    peTableName = peTableName || 'Power Enrichment Target AFR';
+    options = options || {};
+
+    var pe = readTable(catalog, peTableName, binBytes);
+    if (!pe) return { patches: [], patched: null, error: 'PE AFR table not readable' };
+    var rpu = rawPerDegree(pe.table.zAxis && pe.table.zAxis.equation);
+    if (rpu === null || !isFinite(rpu) || rpu <= 0) {
+      return { patches: [], patched: null, error: 'Unsupported PE equation "' + ((pe.table.zAxis && pe.table.zAxis.equation) || '') + '" — refusing to guess scaling' };
+    }
+    var eb = pe.elementBytes;
+    var base = pe.base;
+    var maxRaw = eb === 2 ? 0xFFFF : 0xFF;
+
+    var s = null;
+    (suggestions || []).forEach(function (x) {
+      if (!s && x.kind === 'pe' && x.action === 'enrich' && x.deltaPct) s = x;
+    });
+    if (!s) return { patches: [], patched: new Uint8Array(binBytes), error: null };
+
+    var patched = new Uint8Array(binBytes); // copy
+    var patches = [];
+    var rpmBp = axisBreakpoints(pe.table.yAxis);
+    for (var r = 0; r < pe.rows; r++) {
+      for (var c = 0; c < pe.cols; c++) {
+        var addr = base + (r * pe.cols + c) * eb;
+        var oldValue = pe.values[r][c];
+        // Via display units for clarity: newAFR = oldAFR * (1 - d%), back to raw.
+        var newValue = Math.min(maxRaw, Math.max(0, Math.round((oldValue / rpu) * (1 - s.deltaPct / 100) * rpu)));
+        if (newValue === oldValue) continue;
+        writeRaw(patched, addr, eb, newValue);
+        patches.push({
+          table: peTableName,
+          address: addr,
+          addressHex: '0x' + addr.toString(16).toUpperCase(),
+          sizeBytes: eb,
+          rpm: rpmBp[r] !== undefined ? rpmBp[r] : null,
+          map: null,
+          oldValue: oldValue,
+          newValue: newValue,
+          deltaAfrPct: -Math.round(s.deltaPct * 100) / 100,
+          smoothed: false,
+          confidence: s.confidence || null
+        });
+      }
+    }
+
+    return { patches: patches, patched: patched, error: null };
+  }
+
   P66.findTable = findTable;
   P66.readTable = readTable;
   P66.mapTrimCellToVE = mapTrimCellToVE;
   P66.applyFuelSuggestions = applyFuelSuggestions;
   P66.applySparkSuggestions = applySparkSuggestions;
+  P66.applyPeSuggestions = applyPeSuggestions;
   P66.rawPerDegree = rawPerDegree;
 
   /* ---------- XDF XML parsing (browser + node) ---------- */
