@@ -404,7 +404,41 @@
             });
             html += '</ul>';
           } else {
-            lastPatches = { patches: allPatches, patched: finalImage };
+            // Output-provenance hard rule: diff the actual source-vs-patched
+            // bytes. Any differing byte NOT covered by a verified patch
+            // address blocks the download — this is an additional gate on
+            // top of the verify.js checks, not a replacement.
+            var provenance = null;
+            try {
+              provenance = (typeof P66.buildProvenance === 'function')
+                ? P66.buildProvenance(binBytes, finalImage, allPatches,
+                    { app: 'p66-tuner (advanced)', catalog: xdfCatalog })
+                : { ok: false, sourceSha256: null, patchedSha256: null, changedByteCount: 0,
+                    changeReport: '', uncovered: [],
+                    message: 'Provenance module not loaded (js/provenance.js).' };
+            } catch (perr) {
+              provenance = { ok: false, sourceSha256: null, patchedSha256: null, changedByteCount: 0,
+                changeReport: '', uncovered: [],
+                message: 'Provenance check threw: ' + (perr && perr.message ? perr.message : perr) };
+            }
+            if (!provenance.ok) {
+              lastPatches = null;
+              html += '<h3>Binary Patches — provenance FAILED</h3>';
+              html += '<p class="status-warn"><strong>' + esc(provenance.message) +
+                ' The patched binary is NOT offered for download.</strong></p>';
+              if (provenance.uncovered && provenance.uncovered.length) {
+                html += '<ul>';
+                provenance.uncovered.forEach(function (u) {
+                  html += '<li><strong>' + esc(u.startHex + (u.end > u.start ? '..' + u.endHex : '')) +
+                    '</strong> — ' + u.count + ' changed byte(s) with no covering patch.</li>';
+                });
+                html += '</ul>';
+              }
+              if (provenance.changeReport) {
+                html += '<pre>' + esc(provenance.changeReport) + '</pre>';
+              }
+            } else {
+            lastPatches = { patches: allPatches, patched: finalImage, provenance: provenance };
             html += '<h3>Binary Patches</h3>';
             html += '<p class="status-ok"><strong>Verification passed:</strong> ' + verification.checked +
               ' patch(es) — addresses in range and inside their table\'s XDF region, ' +
@@ -428,7 +462,12 @@
               '<td>' + delta + '</td></tr>';
           });
           html += '</tbody></table>';
-          html += '<p><button id="download-bin-btn" style="width:auto;padding:0.55rem 1.2rem;">Download patched binary</button></p>';
+          html += '<p><strong>Audit trail</strong></p>';
+          html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(provenance.sourceSha256) + '</code></p>';
+          html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(provenance.patchedSha256) + '</code></p>';
+          html += '<p><strong>Changed bytes:</strong> ' + provenance.changedByteCount + '</p>';
+          html += '<p><button id="download-bin-btn" style="width:auto;padding:0.55rem 1.2rem;">Download patched binary</button> ' +
+            '<button id="download-report-btn" style="width:auto;padding:0.55rem 1.2rem;">Download change report (.txt)</button></p>';
           html += '<p class="status-warn"><strong>Before you flash:</strong> save a backup copy of your ORIGINAL binary somewhere safe — ' +
             'if anything behaves unexpectedly you will need it to go back.</p>';
           html += '<p class="status-warn"><strong>Checksum status: none found.</strong> ' +
@@ -437,6 +476,7 @@
             'without manual checksum correction. Bench-verify on a spare PCM before ' +
             'flashing a running vehicle.</p>';
           }
+          } // end provenance-ok else
         } else {
           html += '<p class="muted">No patches applied (no actionable fuel, spark, or PE suggestions).</p>';
         }
@@ -479,6 +519,23 @@
         writeConsole('Patched binary downloaded (' + lastPatches.patches.length + ' patches). No checksum correction applied (none found for P66) — bench-verify before flashing.');
       });
     }
+    var rptBtn = document.getElementById('download-report-btn');
+    if (rptBtn && lastPatches && lastPatches.provenance) {
+      rptBtn.addEventListener('click', function () {
+        var blob = new Blob([lastPatches.provenance.changeReport], { type: 'text/plain' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'p66-change-report.txt';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () {
+          URL.revokeObjectURL(a.href);
+          a.remove();
+        }, 1000);
+        writeConsole('Change report downloaded (source SHA-256 ' + lastPatches.provenance.sourceSha256.slice(0, 12) + '…, ' +
+          lastPatches.provenance.changedByteCount + ' bytes changed).');
+      });
+    }
   }
 
   document.getElementById('tune-btn').addEventListener('click', function () {
@@ -488,7 +545,7 @@
     }
     var mode = modeSelect ? modeSelect.value : 'conservative';
     try {
-      var result = P66.generateSuggestions(sessionReport, mode);
+      var result = P66.generateSuggestions(sessionReport, mode, xdfCatalog);
       renderTune(result);
       writeConsole('Tune suggestions generated (' + mode + ' mode): ' + result.summary);
     } catch (err) {

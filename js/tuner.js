@@ -103,13 +103,58 @@
   }
 
   /**
-   * Spark suggestions from knock analysis.
-   * Uses per-event statistics: the target region is the non-transient region
-   * with the most knock samples, and the pull is sized from the median event
-   * peak (robust against single-sample spikes). Tip-out knock is flagged as
-   * possible false knock.
+   * Main Spark Advance axis breakpoints from a catalog (bundled by default).
+   * Returns { rpmBp: [...], mapBp: [...] } or null when unavailable.
+   * Mirrors js/xdf-map.js mapPointToTable's nearest-breakpoint mapping, so
+   * the cell an event is gated on is the cell the patcher would retard.
    */
-  function sparkSuggestions(knockReport, gates) {
+  function sparkAxes(catalog) {
+    if (!catalog || !catalog.tables) return null;
+    var t = null;
+    catalog.tables.forEach(function (tbl) {
+      if (/main spark/i.test(tbl.title || '')) t = tbl;
+    });
+    if (!t || !t.xAxis || !t.yAxis) return null;
+    function bps(axis) {
+      var out = [];
+      (axis.labels || []).forEach(function (l) {
+        var v = parseFloat(l);
+        if (isFinite(v)) out.push(v);
+      });
+      return out;
+    }
+    var rpmBp = bps(t.yAxis), mapBp = bps(t.xAxis);
+    if (!rpmBp.length || !mapBp.length) return null;
+    return { rpmBp: rpmBp, mapBp: mapBp };
+  }
+
+  function nearestSparkCell(axes, rpm, map) {
+    if (rpm === null || rpm === undefined || map === null || map === undefined) return null;
+    function nearest(bp, v) {
+      var best = 0, bestD = Math.abs(bp[0] - v);
+      for (var i = 1; i < bp.length; i++) {
+        var d = Math.abs(bp[i] - v);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    }
+    return { row: nearest(axes.rpmBp, rpm), col: nearest(axes.mapBp, map) };
+  }
+
+  /**
+   * Spark suggestions from knock analysis.
+   *
+   * Gating — conservative by design; ghosts must never move timing:
+   *  1. Single-sample spikes are burst noise, not knock (genuine PCM knock
+   *     retard decays over many samples). Reported, never actionable.
+   *  2. Tip-out events (throttle closed during the event) are drivetrain
+   *     false knock. Reported, never actionable.
+   *  3. Automatic retard requires REPEATABLE knock: >= 2 events mapping to
+   *     the same Main Spark cell. A single genuine event is monitor-only.
+   * The pull for a repeatable cell is sized from the median peak of that
+   * cell's events. knockCells carry each event's RPM/MAP for the patcher.
+   */
+  function sparkSuggestions(knockReport, gates, catalog) {
     var out = [];
     if (!knockReport || !knockReport.available) return out;
     if (knockReport.knockSamples < gates.minKnockSamples) {
@@ -124,51 +169,131 @@
       }
       return out;
     }
-    // Target region: most knock samples outside transient (tip-out noise).
-    var targetRegion = null, targetSamples = 0;
-    Object.keys(knockReport.byRegion).forEach(function (r) {
-      if (r === 'transient') return;
-      if (knockReport.byRegion[r].samples > targetSamples) {
-        targetSamples = knockReport.byRegion[r].samples;
-        targetRegion = r;
-      }
+
+    // Partition events: only steady-throttle, multi-sample events can act.
+    var clean = [], noise = [], tipOut = [];
+    (knockReport.events || []).forEach(function (e) {
+      var isNoise = (e.suspectNoise !== undefined) ? e.suspectNoise : e.samples <= 1;
+      var isTipOut = (e.tipOut !== undefined) ? e.tipOut
+        : (e.tpsDrop !== null && e.tpsDrop !== undefined && e.tpsDrop > 10);
+      if (isNoise) noise.push(e);
+      else if (isTipOut) tipOut.push(e);
+      else clean.push(e);
     });
-    if (!targetRegion) {
+    var rejectedParts = [];
+    if (noise.length) rejectedParts.push(noise.length +
+      ' single-sample spike(s) rejected as noise (peak ' +
+      noise.map(function (e) { return e.peakKR + '°'; }).join(', ') + ')');
+    if (tipOut.length) rejectedParts.push(tipOut.length +
+      ' tip-out event(s) rejected as false knock (throttle closed during event)');
+    function rejectedNote() {
+      return rejectedParts.length ? ' ' + rejectedParts.join('. ') + '.' : '';
+    }
+
+    // Target region: non-transient region with the most CLEAN knock samples.
+    var targetRegion = null, targetSamples = 0;
+    var cleanByRegion = {};
+    clean.forEach(function (e) {
+      if (e.region === 'transient') return;
+      cleanByRegion[e.region] = (cleanByRegion[e.region] || 0) + e.samples;
+    });
+    Object.keys(cleanByRegion).forEach(function (r) {
+      if (cleanByRegion[r] > targetSamples) { targetSamples = cleanByRegion[r]; targetRegion = r; }
+    });
+    var regionEvents = targetRegion
+      ? clean.filter(function (e) { return e.region === targetRegion; })
+      : [];
+
+    function monitorSuggestion(reason, cells) {
       out.push({
-        kind: 'spark', table: 'Spark Advance', cell: 'global',
+        kind: 'spark', table: 'Spark Advance',
+        cell: (targetRegion ? targetRegion + ' region' : 'global'),
         action: 'none', deltaDeg: 0,
-        reason: 'Knock occurred only during transients — likely false knock from drivetrain noise. No timing change suggested; verify with audio knock detection.',
+        knockCells: cells,
+        reason: reason + rejectedNote(),
         confidence: 'low', samples: knockReport.knockSamples
       });
+    }
+    function eventCells(evs) {
+      var cells = [];
+      evs.forEach(function (e) {
+        if (e.rpm !== null && e.rpm !== undefined && e.map !== null && e.map !== undefined) {
+          cells.push({ rpm: e.rpm, map: e.map, peakKR: e.peakKR });
+        }
+      });
+      return cells;
+    }
+
+    if (!regionEvents.length) {
+      monitorSuggestion(
+        clean.length
+          ? 'Genuine knock events occurred only during transients — likely false knock from drivetrain noise. No timing change suggested; verify with audio knock detection.'
+          : 'No steady-throttle knock events. No timing change suggested.' +
+            (noise.length + tipOut.length ? '' : ' Monitor; no change suggested.'),
+        []);
       return out;
     }
-    var regionEvents = knockReport.events.filter(function (e) { return e.region === targetRegion; });
-    var peaks = regionEvents.map(function (e) { return e.peakKR; }).sort(function (a, b) { return a - b; });
-    var medianPeak = peaks[Math.floor(peaks.length / 2)];
-    var pull = round2(clamp(medianPeak, 0.5, gates.maxSparkDeltaDeg));
-    var tipOut = regionEvents.some(function (e) { return e.tpsDrop !== null && e.tpsDrop > 10; });
-    var singleSpike = regionEvents.length === 1 && regionEvents[0].samples === 1;
-    // Knock cell positions (RPM/MAP at each event's peak KR) for the patcher.
-    var knockCells = [];
+
+    // Repeatability: >= 2 events mapping to the same Main Spark cell.
+    var axes = sparkAxes(catalog || P66.BUNDLED_CATALOG);
+    if (!axes) {
+      monitorSuggestion(
+        regionEvents.length + ' genuine knock event(s) in ' + targetRegion +
+        ', but spark table axes are unavailable — repeatability cannot be confirmed. No timing change suggested.',
+        eventCells(regionEvents));
+      return out;
+    }
+    var cells = {}; // "row,col" -> { events, row, col }
+    var unmapped = 0;
     regionEvents.forEach(function (e) {
-      if (e.rpm !== null && e.rpm !== undefined && e.map !== null && e.map !== undefined) {
-        knockCells.push({ rpm: e.rpm, map: e.map, peakKR: e.peakKR });
-      }
+      var hit = nearestSparkCell(axes, e.rpm, e.map);
+      if (!hit) { unmapped++; return; }
+      var key = hit.row + ',' + hit.col;
+      if (!cells[key]) cells[key] = { events: [], row: hit.row, col: hit.col };
+      cells[key].events.push(e);
     });
-    out.push({
-      kind: 'spark', table: 'Spark Advance', cell: targetRegion + ' region',
-      action: singleSpike ? 'none' : 'retard timing',
-      deltaDeg: singleSpike ? 0 : -pull,
-      knockCells: knockCells,
-      reason: knockReport.knockEvents + ' knock event(s), ' + knockReport.knockSamples +
-        ' samples (' + knockReport.knockPct + '% of log) in ' + targetRegion +
-        '; median event peak ' + medianPeak + '°, max ' + knockReport.maxKR + '°.' +
-        (singleSpike ? ' Only a single-sample spike — likely noise; no change suggested.' : '') +
-        (tipOut ? ' Largest event coincided with throttle lift — possible false knock; verify before pulling timing.' : '') +
-        (!singleSpike ? ' Pull timing, re-log, and confirm KR trends down.' : ''),
-      confidence: singleSpike ? 'low' : (regionEvents.length >= 2 ? 'high' : 'medium'),
-      samples: knockReport.knockSamples
+    if (unmapped) rejectedParts.push(unmapped + ' event(s) could not be mapped to the spark table');
+
+    var keys = Object.keys(cells);
+    var repeatable = keys.filter(function (k) { return cells[k].events.length >= 2; });
+    var singletons = keys.filter(function (k) { return cells[k].events.length < 2; });
+
+    // Monitor-only notes for genuine but not-yet-repeatable knock.
+    singletons.forEach(function (k) {
+      var evs = cells[k].events;
+      var e = evs[0];
+      var label = axes.rpmBp[cells[k].row] + ' RPM / ' + axes.mapBp[cells[k].col] + ' kPa';
+      monitorSuggestion(
+        'Genuine knock seen once at ' + e.rpm + ' RPM / ' + e.map + ' kPa (peak ' + e.peakKR +
+        '°) — not yet repeatable in spark cell ' + label + '. Log again and confirm it returns ' +
+        'in the same cell before pulling timing.',
+        eventCells(evs));
     });
+
+    // Actionable: one suggestion per repeatable cell, sized from that cell's median peak.
+    repeatable.forEach(function (k) {
+      var evs = cells[k].events;
+      var peaks = evs.map(function (e) { return e.peakKR; }).sort(function (a, b) { return a - b; });
+      var medianPeak = peaks[Math.floor(peaks.length / 2)];
+      var pull = round2(clamp(medianPeak, 0.5, gates.maxSparkDeltaDeg));
+      var label = axes.rpmBp[cells[k].row] + ' RPM / ' + axes.mapBp[cells[k].col] + ' kPa';
+      out.push({
+        kind: 'spark', table: 'Spark Advance',
+        cell: targetRegion + ' region — spark cell ' + label,
+        action: 'retard timing',
+        deltaDeg: -pull,
+        knockCells: eventCells(evs),
+        reason: evs.length + ' repeatable knock events in ' + targetRegion + ' (' + label +
+          '); median event peak ' + medianPeak + '°. Pull timing, re-log, and confirm KR trends down.' +
+          rejectedNote(),
+        confidence: evs.length >= 3 ? 'high' : 'medium',
+        samples: knockReport.knockSamples
+      });
+    });
+
+    if (!repeatable.length && !singletons.length) {
+      monitorSuggestion('No mappable knock events in ' + targetRegion + '.', []);
+    }
     return out;
   }
 
@@ -208,13 +333,15 @@
   /**
    * Generate the full suggestion set for a session report.
    * mode: 'conservative' | 'balanced' | 'aggressive'
+   * catalog: XDF catalog used for spark-cell repeatability gating
+   *   (defaults to the bundled P66 definitions when omitted).
    */
-  function generateSuggestions(report, mode) {
+  function generateSuggestions(report, mode, catalog) {
     mode = MODES[mode] ? mode : 'conservative';
     var gates = MODES[mode];
     var suggestions = []
       .concat(fuelSuggestions(report.fuelTrims, gates, report.narrowband))
-      .concat(sparkSuggestions(report.knock, gates))
+      .concat(sparkSuggestions(report.knock, gates, catalog))
       .concat(peSuggestions(report.lambda, gates));
 
     var actionable = suggestions.filter(function (s) { return s.action !== 'none'; });

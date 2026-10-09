@@ -18,6 +18,10 @@
     bin: null  // { name, bytes, guard }
   };
 
+  // Provenance record for the most recent step-3 build (null unless both
+  // the verify.js gate and the provenance hard rule passed).
+  var easyProvenance = null;
+
   function $(id) { return document.getElementById(id); }
 
   function esc(s) {
@@ -168,7 +172,7 @@
       return;
     }
     var report = P66.analyzeSession(state.log.parsed, state.log.mapResult);
-    var sug = P66.generateSuggestions(report, 'conservative'); // easy mode: safest settings, always
+    var sug = P66.generateSuggestions(report, 'conservative', P66.BUNDLED_CATALOG); // easy mode: safest settings, always
     var binBytes = state.bin.bytes;
 
     var fuel = P66.applyFuelSuggestions(catalog, binBytes, sug.actionable);
@@ -215,11 +219,46 @@
     if (!allPatches.length) {
       html += '<p class="status-ok"><strong>Your log looks healthy — nothing to change, nothing to flash.</strong></p>';
     } else if (verification.ok) {
-      html += '<p><button id="easy-download-btn" style="width:auto;padding:0.6rem 1.4rem;">Download tuned binary</button></p>';
-      html += '<p class="status-warn"><strong>Before you flash:</strong></p><ul>' +
-        '<li>Save a backup copy of your <strong>original</strong> binary somewhere safe.</li>' +
-        '<li>If you can, test on a spare computer (PCM) first — not your daily driver.</li>' +
-        '<li>After flashing, drive gently, pull another log, and run it through here again.</li></ul>';
+      // Output-provenance hard rule, same as the advanced flow: the actual
+      // source-vs-patched byte diff must be fully covered by verified patch
+      // addresses, or no download is offered. Additional gate on top of
+      // the verify.js checks, not a replacement.
+      var prov = null;
+      try {
+        prov = (typeof P66.buildProvenance === 'function')
+          ? P66.buildProvenance(binBytes, finalImage, allPatches,
+              { app: 'p66-tuner (easy wizard)', catalog: catalog })
+          : { ok: false, sourceSha256: null, patchedSha256: null, changedByteCount: 0,
+              changeReport: '', uncovered: [],
+              message: 'Provenance module not loaded (js/provenance.js).' };
+      } catch (perr) {
+        prov = { ok: false, sourceSha256: null, patchedSha256: null, changedByteCount: 0,
+          changeReport: '', uncovered: [],
+          message: 'Provenance check threw: ' + (perr && perr.message ? perr.message : perr) };
+      }
+      easyProvenance = (prov && prov.ok) ? prov : null;
+      if (prov && prov.ok) {
+        html += '<h3>Audit trail</h3>';
+        html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(prov.sourceSha256) + '</code></p>';
+        html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(prov.patchedSha256) + '</code></p>';
+        html += '<p><strong>Changed bytes:</strong> ' + prov.changedByteCount + '</p>';
+        html += '<p><button id="easy-download-btn" style="width:auto;padding:0.6rem 1.4rem;">Download tuned binary</button> ' +
+          '<button id="easy-report-btn" style="width:auto;padding:0.6rem 1.4rem;">Download change report (.txt)</button></p>';
+        html += '<p class="status-warn"><strong>Before you flash:</strong></p><ul>' +
+          '<li>Save a backup copy of your <strong>original</strong> binary somewhere safe.</li>' +
+          '<li>If you can, test on a spare computer (PCM) first — not your daily driver.</li>' +
+          '<li>After flashing, drive gently, pull another log, and run it through here again.</li></ul>';
+      } else {
+        html += '<p class="status-warn"><strong>No download — ' + esc(prov.message) + '</strong></p>';
+        if (prov.uncovered && prov.uncovered.length) {
+          html += '<ul>';
+          prov.uncovered.forEach(function (u) {
+            html += '<li><strong>' + esc(u.startHex + (u.end > u.start ? '..' + u.endHex : '')) +
+              '</strong> — ' + u.count + ' changed byte(s) with no covering patch.</li>';
+          });
+          html += '</ul>';
+        }
+      }
     } else {
       html += '<p class="status-warn"><strong>No download — the safety checks did not all pass.</strong></p><ul>';
       verification.failures.forEach(function (f) {
@@ -229,7 +268,7 @@
     }
 
     out.innerHTML = html;
-    markStep(3, verification.ok && allPatches.length > 0);
+    markStep(3, !!easyProvenance);
 
     var dl = $('easy-download-btn');
     if (dl && finalImage) {
@@ -238,6 +277,18 @@
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'p66-tuned.bin';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      });
+    }
+    var rpt = $('easy-report-btn');
+    if (rpt && easyProvenance) {
+      rpt.addEventListener('click', function () {
+        var blob = new Blob([easyProvenance.changeReport], { type: 'text/plain' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'p66-change-report.txt';
         document.body.appendChild(a);
         a.click();
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);

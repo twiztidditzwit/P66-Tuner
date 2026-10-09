@@ -138,9 +138,45 @@
   }
 
   /**
+   * Knock retard unit handling.
+   *
+   * The P66 ALDL datastream reports knock retard as a raw 0-255 byte:
+   *   KR (degrees) = raw * 0.175781            (docs/aldl.md, Robert Saar P66 V6 ADX)
+   * TunerPro applies the ADX conversion when logging, so a normal log's KR
+   * column already holds degrees — every nonzero value is a multiple of
+   * 0.175781 (e.g. 8 counts = 1.41 deg). A log captured without the
+   * conversion (raw ALDL stream) holds plain integers instead.
+   *
+   * detectKrScale: all-integer KR values => raw counts, scale them to
+   * degrees. Any fractional value => already degrees, scale = 1. Scaling
+   * down is the conservative direction: treating raw counts as degrees
+   * would size spark retard ~5.7x too large.
+   */
+  var KR_RAW_TO_DEG = 0.175781;
+
+  function detectKrScale(rows, krCol) {
+    var seen = 0, allInt = true;
+    for (var i = 0; i < rows.length && seen < 2000; i++) {
+      var v = num(rows[i][krCol]);
+      if (v === null || v <= 0) continue;
+      seen++;
+      if (v !== Math.round(v)) { allInt = false; break; }
+    }
+    if (seen > 0 && allInt) return { scale: KR_RAW_TO_DEG, rawCounts: true };
+    return { scale: 1, rawCounts: false };
+  }
+
+  /**
    * Knock retard analysis. KR > 0.5 deg counts as active knock.
    * Consecutive active rows are grouped into events; sizing uses robust
    * per-event statistics so a single spike can't drive the recommendation.
+   *
+   * Each exported event carries two trust flags for the tuner:
+   *   suspectNoise — single-sample spike. Genuine PCM knock retard decays
+   *     over many samples (~1 deg/sec observed); a full-scale spike that
+   *     vanishes in one ~0.15 s sample is burst noise, not combustion knock.
+   *   tipOut — throttle closed during the event (tpsDrop > 10). Classic
+   *     drivetrain-noise false knock; never sized into a spark suggestion.
    */
   function analyzeKnock(rows, mapResult) {
     var krCol = P66.columnFor(mapResult, 'KR');
@@ -149,11 +185,14 @@
     var mapCol = P66.columnFor(mapResult, 'MAP');
     if (!krCol) return { available: false, reason: 'Need KR (knock retard) channel.' };
 
+    var krScale = detectKrScale(rows, krCol);
+
     // Group consecutive KR-active rows into events.
     var events = [];
     var cur = null;
     rows.forEach(function (row, i) {
-      var kr = num(row[krCol]);
+      var krRaw = num(row[krCol]);
+      var kr = krRaw === null ? null : krRaw * krScale.scale;
       if (kr !== null && kr > 0.5) {
         if (!cur) {
           cur = {
@@ -189,6 +228,8 @@
       e.region = best;
       e.avgKR = e.sumKR / e.samples;
       e.tpsDrop = (e.tpsStart !== null && e.tpsEnd !== null) ? e.tpsStart - e.tpsEnd : 0;
+      e.tipOut = e.tpsDrop > 10;
+      e.suspectNoise = e.samples <= 1;
     });
 
     var active = 0, maxKR = 0, sumKR = 0;
@@ -212,6 +253,9 @@
       knockPct: rows.length ? round2(100 * active / rows.length) : 0,
       maxKR: round2(maxKR),
       avgKRWhenActive: active ? round2(sumKR / active) : 0,
+      krUnits: 'degrees',             // report is always normalized to degrees
+      krScale: krScale.scale,         // 1, or 0.175781 when raw counts were detected
+      krRawCountsDetected: krScale.rawCounts,
       byRegion: byRegion,
       events: events.map(function (e) {
         return {
@@ -219,7 +263,9 @@
           peakKR: round2(e.peakKR), avgKR: round2(e.avgKR),
           rpm: e.peakRpm !== null && e.peakRpm !== undefined ? round2(e.peakRpm) : null,
           map: e.peakMap !== null && e.peakMap !== undefined ? round2(e.peakMap) : null,
-          tpsDrop: e.tpsDrop === null ? null : round2(e.tpsDrop)
+          tpsDrop: e.tpsDrop === null ? null : round2(e.tpsDrop),
+          tipOut: !!e.tipOut,
+          suspectNoise: !!e.suspectNoise
         };
       })
     };
