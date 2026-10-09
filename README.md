@@ -19,6 +19,34 @@ python3 -m http.server 8080
 
 Then open `http://localhost:8080` in your browser.
 
+## Desktop build
+
+For a no-server, double-click-to-run copy, package the static app as a zip:
+
+```bash
+node tools/package-zip.js
+```
+
+This writes `dist/p66-log-analyzer.zip` (a local build artifact — never
+commit `dist/`), containing:
+
+- `index.html`, `app.js`, `styles.css`
+- `js/` (all app modules; test/scratch files excluded)
+- `README-QUICKSTART.txt` — 3 steps: unzip, double-click `index.html`, use Easy mode
+
+Excluded from the zip: `defs/`, `tools/`, `docs/`, `dist/`, `.git`, and any
+test/scratch files.
+
+After building, the script extracts the zip to a temp dir and verifies that
+every `<script src="...">` in `index.html` exists inside the zip. It exits
+nonzero on failure. There is no separate test file; all assertions live in
+`tools/package-zip.js`.
+
+To run it: unzip anywhere and double-click `index.html`. It runs fully
+offline — no install, no server. Bring your own TunerPro log (`.csv`) and a
+stock 64KB `.bin` read of your PCM. A minimal Tauri desktop-app scaffold
+lives in `tauri-src/` if you want a native window instead.
+
 ## Overview
 
 P66-Tuner is intended to help tuners and engineers:
