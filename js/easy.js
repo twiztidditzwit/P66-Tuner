@@ -171,7 +171,9 @@
       out.innerHTML = '<p class="status-warn">Built-in table definitions failed to load. Try the Advanced tab instead.</p>';
       return;
     }
-    var report = P66.analyzeSession(state.log.parsed, state.log.mapResult);
+    var easyAlt = (typeof P66.createAltitudeStore === 'function')
+      ? P66.createAltitudeStore().get() : 2840;
+    var report = P66.analyzeSession(state.log.parsed, state.log.mapResult, { altitudeFt: easyAlt });
     var sug = P66.generateSuggestions(report, 'conservative', P66.BUNDLED_CATALOG); // easy mode: safest settings, always
     var binBytes = state.bin.bytes;
 
@@ -195,6 +197,12 @@
 
     var html = '';
     var bi = report.bankImbalance;
+    var ebaro = report.baro;
+    if (ebaro && ebaro.available && ebaro.status === 'fault') {
+      html += '<h3>🛑 Baro reading looks wrong</h3><p>' + esc(ebaro.note) + '</p>';
+    } else if (ebaro && ebaro.available && ebaro.status === 'warn') {
+      html += '<p>⚠️ ' + esc(ebaro.note) + '</p>';
+    }
     if (bi && bi.available && bi.findingCount) {
       html += '<h3>⚠️ Bank imbalance found</h3><p>Bank ' + bi.findings[0].leanBank +
         ' is running leaner than the other bank in ' + bi.findingCount +

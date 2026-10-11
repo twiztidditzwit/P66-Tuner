@@ -623,23 +623,30 @@
 
   /**
    * Full session analysis. Returns a report object.
+   * opts.altitudeFt (default 2840) feeds the baro plausibility check.
    */
-  function analyzeSession(parsed, mapResult) {
+  function analyzeSession(parsed, mapResult, opts) {
     var rows = parsed.rows.slice();
     segmentRows(rows, mapResult);
     var missing = [];
     ['RPM', 'MAP', 'TPS'].forEach(function (s) {
       if (!P66.columnFor(mapResult, s)) missing.push(s);
     });
+    var altitudeFt = (opts && isFinite(opts.altitudeFt)) ? opts.altitudeFt
+      : (typeof P66.DEFAULT_ALTITUDE_FT === 'number' ? P66.DEFAULT_ALTITUDE_FT : 2840);
     return {
       rowCount: rows.length,
       regionDistribution: regionDistribution(rows),
       missingChannels: missing,
+      altitudeFt: altitudeFt,
       fuelTrims: analyzeFuelTrims(rows, mapResult),
       knock: analyzeKnock(rows, mapResult),
       lambda: analyzeLambda(rows, mapResult),
       narrowband: analyzeNarrowband(rows, mapResult),
-      bankImbalance: analyzeBankImbalance(rows, mapResult)
+      bankImbalance: analyzeBankImbalance(rows, mapResult),
+      baro: (typeof P66.analyzeBaro === 'function')
+        ? P66.analyzeBaro(rows, mapResult, altitudeFt)
+        : { available: false, reason: 'Altitude module not loaded (js/altitude.js).' }
     };
   }
 

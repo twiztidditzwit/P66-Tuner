@@ -17,6 +17,32 @@
   var analysisResults = document.getElementById('analysis-results');
   var tuneResults = document.getElementById('tune-results');
   var modeSelect = document.getElementById('mode');
+  var altitudeInput = document.getElementById('altitude-ft');
+
+  // Altitude (feet) for the baro plausibility check. Persisted per browser;
+  // defaults to 2840 ft. Read fresh at analysis time so the input always wins.
+  function currentAltitudeFt() {
+    if (typeof P66.createAltitudeStore === 'function') {
+      var store = P66.createAltitudeStore();
+      if (altitudeInput && altitudeInput.value.trim() !== '') {
+        var v = parseFloat(altitudeInput.value);
+        if (isFinite(v)) store.set(v);
+      }
+      return store.get();
+    }
+    return 2840;
+  }
+  if (altitudeInput && typeof P66.createAltitudeStore === 'function') {
+    try { altitudeInput.value = P66.createAltitudeStore().get(); } catch (e) { /* ignore */ }
+    altitudeInput.addEventListener('change', function () {
+      var v = parseFloat(altitudeInput.value);
+      if (isFinite(v) && P66.createAltitudeStore().set(v)) {
+        writeConsole('Altitude set to ' + Math.round(v) + ' ft — baro check will use it on the next analysis.');
+      } else {
+        writeConsole('Altitude not saved: enter a number between -1000 and 15000 ft.');
+      }
+    });
+  }
   var dashParts = {
     heatmap: document.getElementById('heatmap'),
     coverage: document.getElementById('coverage'),
@@ -268,6 +294,22 @@
       html += '<p class="muted">' + esc(l.reason || 'No lambda data.') + '</p>';
     }
 
+    // Altitude & baro
+    var baro = report.baro;
+    html += '<h3>Altitude &amp; Baro</h3>';
+    if (baro && baro.available) {
+      var bcls = baro.status === 'ok' ? 'status-ok' : (baro.status === 'warn' ? 'status-warn' : 'status-bad');
+      html += '<p class="' + bcls + '">' + esc(baro.note) + '</p>';
+      html += '<p class="muted">Altitude setting: ' + esc(String(report.altitudeFt)) + ' ft → expected baro ~' +
+        baro.expectedKpa + ' kPa. PCM reported ' + baro.pcmMedianKpa + ' kPa (median of ' +
+        baro.samples + ' samples).</p>';
+      if (baro.wotMapFlag) {
+        html += '<p class="status-bad">' + esc(baro.wotMapFlag) + '</p>';
+      }
+    } else {
+      html += '<p class="muted">' + esc((baro && baro.reason) || 'Baro check unavailable.') + '</p>';
+    }
+
     // Bank imbalance
     var bi = report.bankImbalance;
     html += '<h3>Bank Balance</h3>';
@@ -323,7 +365,7 @@
       return;
     }
     try {
-      sessionReport = P66.analyzeSession(parsedLog, mapResult);
+      sessionReport = P66.analyzeSession(parsedLog, mapResult, { altitudeFt: currentAltitudeFt() });
       sessionHistory.push(sessionReport);
       if (sessionHistory.length > 10) sessionHistory.shift();
       renderAnalysis(sessionReport);
