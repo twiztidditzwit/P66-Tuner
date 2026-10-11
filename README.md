@@ -114,6 +114,11 @@ P66-Tuner is intended to help tuners and engineers:
 - [x] Create UI dashboard for trend inspection and pass comparison.
 - [x] Narrowband O2 analysis (cell bias, cross-count health, WOT richness check).
 - [x] BCC diffing harness (`tools/bcc-diff.js`) for XDF table discovery.
+- [x] Log coverage coach (`js/coverage.js`) — scores the log and prescribes the drive cycle that fills the gaps.
+- [x] Sample-quality gating — fuel/narrowband analysis excludes cold-start and transient rows.
+- [x] Bank-imbalance diagnostic — flags bank-to-bank trim splits; tuner cautions instead of mistuning the healthy bank.
+- [x] Cumulative patch ledger (`js/ledger.js`) — multi-session runaway guardrail per source binary.
+- [x] Tune journal (`js/journal.js`) — session notes persisted in the browser, rendered in the dashboard.
 - [ ] Add configurable rule packs for P66 strategies.
 - [ ] Add import/export adapters for common tuning tool formats.
 

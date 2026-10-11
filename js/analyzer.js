@@ -79,9 +79,73 @@
   }
 
   /**
+   * Sample-quality gating for trim-driven analysis.
+   *
+   * Two classic sources of bad fueling suggestions:
+   *   1. Cold operation — fuel trims during warmup (open loop, cold O2) do
+   *      not reflect the VE table. Rows below the warmed-up ECT threshold
+   *      are excluded when an ECT channel is mapped.
+   *   2. Transients — accel enrichment and decel fuel cut swing trims for
+   *      reasons unrelated to the VE cell. Transient rows are excluded.
+   *
+   * Returns { rows, gatedWarmup, gatedTransient, ectAvailable, warmNote }.
+   * A null ECT value on a row is treated as unknown (row kept): the gate
+   * targets the known-cold warmup period, not sensor dropouts mid-log.
+   */
+  var WARM_F = 160;
+
+  /**
+   * Warmup threshold for the ECT column, without trusting a unit label.
+   * A driven P66 log reports ECT in °F (TunerPro units row) with a session
+   * max well above 140; anything at or below that is either °C or an
+   * engine that never warmed up. In the ambiguous band an absolute
+   * threshold cannot be trusted, so the warmup edge is cut relative to
+   * the session max — the rising cold-start edge is what pollutes trims.
+   * Returns { threshold, label } or null when no ECT samples exist.
+   */
+  function ectWarmThreshold(rows, ectCol) {
+    var max = -Infinity, n = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var v = num(rows[i][ectCol]);
+      if (v === null) continue;
+      n++;
+      if (v > max) max = v;
+    }
+    if (!n) return null;
+    if (max > 140) return { threshold: WARM_F, label: WARM_F + '°F' };
+    return { threshold: max - 10, label: 'within 10° of session max (' + Math.round(max) + '°)' };
+  }
+
+  function qualityRows(rows, mapResult) {
+    var ectCol = P66.columnFor(mapResult, 'ECT');
+    var wt = ectCol ? ectWarmThreshold(rows, ectCol) : null;
+    var kept = [], gatedWarmup = 0, gatedTransient = 0;
+    rows.forEach(function (row) {
+      if ((row._region || '') === 'transient') { gatedTransient++; return; }
+      if (wt) {
+        var ect = num(row[ectCol]);
+        if (ect !== null && ect < wt.threshold) { gatedWarmup++; return; }
+      }
+      kept.push(row);
+    });
+    return {
+      rows: kept,
+      gatedWarmup: gatedWarmup,
+      gatedTransient: gatedTransient,
+      ectAvailable: !!ectCol,
+      warmNote: wt
+        ? 'Excluded ' + gatedWarmup + ' cold row(s) below ' + wt.label +
+          ' and ' + gatedTransient + ' transient row(s).'
+        : 'No ECT channel — warmup gating unavailable; cold-start rows included (' +
+          gatedTransient + ' transient row(s) excluded).'
+    };
+  }
+
+  /**
    * Fuel trim bias per RPM x MAP cell.
    * Combined trim = STFT + LTFT (percent), averaged across banks.
    * Trim channels are auto-normalized (percent / multiplier / GM 128-count).
+   * Only warmed-up, steady-state rows are used (see qualityRows).
    */
   function analyzeFuelTrims(rows, mapResult) {
     var banks = P66.fuelTrimBanks(mapResult);
@@ -90,6 +154,10 @@
     if (!banks.length || !rpmCol || !mapCol) {
       return { available: false, reason: 'Need STFT/LTFT, RPM and MAP channels.' };
     }
+    // Sample-quality gating: cold and transient rows do not reflect the VE
+    // table, so they are excluded before any averaging happens.
+    var q = qualityRows(rows, mapResult);
+    rows = q.rows;
     // Detect each trim column's encoding once.
     var styles = banks.map(function (b) {
       return {
@@ -133,7 +201,13 @@
       cells: cellList,
       cellCount: cellList.length,
       overallAvgAbsTrim: totalN ? round2(totalAbs / totalN) : 0,
-      totalSamples: totalN
+      totalSamples: totalN,
+      qualityGating: {
+        gatedWarmup: q.gatedWarmup,
+        gatedTransient: q.gatedTransient,
+        ectAvailable: q.ectAvailable,
+        note: q.warmNote
+      }
     };
   }
 
@@ -339,6 +413,11 @@
       return { available: false, reason: 'Need O2 sensor (mV), RPM and MAP channels.' };
     }
 
+    // Same sample-quality gating as fuel trims: a cold O2 sensor reads lean
+    // and tells you nothing about the VE table.
+    var nbq = qualityRows(rows, mapResult);
+    rows = nbq.rows;
+
     // Per-cell bias
     var cells = {};
     rows.forEach(function (row) {
@@ -434,7 +513,101 @@
       cells: cellList,
       cellCount: cellList.length,
       crossCounts: crossCounts,
-      wotCheck: wotCheck
+      wotCheck: wotCheck,
+      qualityGating: {
+        gatedWarmup: nbq.gatedWarmup,
+        gatedTransient: nbq.gatedTransient,
+        ectAvailable: nbq.ectAvailable,
+        note: nbq.warmNote
+      }
+    };
+  }
+
+  /**
+   * Bank-imbalance diagnostic.
+   *
+   * When both banks' trims are logged, a large bank-to-bank split in the
+   * same RPM x MAP cell means a bank-specific problem — vacuum leak,
+   * injector issue, lazy O2 sensor, exhaust leak — not a VE table error.
+   * Averaging the banks (as fuel trim analysis does) would then suggest a
+   * global VE change that mistunes the healthy bank. Findings are reported
+   * as diagnostics; the tuner attaches a caution to affected cells instead
+   * of silently suggesting.
+   */
+  var IMBALANCE_MIN_SAMPLES = 15; // per bank, per cell
+  var IMBALANCE_DELTA_PCT = 5;    // |avg1 - avg2| at or above this is a finding
+
+  function analyzeBankImbalance(rows, mapResult) {
+    var b1 = { stft: P66.columnFor(mapResult, 'STFT_B1'), ltft: P66.columnFor(mapResult, 'LTFT_B1') };
+    var b2 = { stft: P66.columnFor(mapResult, 'STFT_B2'), ltft: P66.columnFor(mapResult, 'LTFT_B2') };
+    if ((!b1.stft && !b1.ltft) || (!b2.stft && !b2.ltft)) {
+      return { available: false, reason: 'Need bank-specific STFT/LTFT channels (both banks).' };
+    }
+    var rpmCol = P66.columnFor(mapResult, 'RPM');
+    var mapCol = P66.columnFor(mapResult, 'MAP');
+    if (!rpmCol || !mapCol) {
+      return { available: false, reason: 'Need RPM and MAP channels.' };
+    }
+    var q = qualityRows(rows, mapResult);
+    rows = q.rows;
+    var style1 = {
+      stft: b1.stft ? P66.detectTrimStyle(sampleColumn(rows, b1.stft)) : 'percent',
+      ltft: b1.ltft ? P66.detectTrimStyle(sampleColumn(rows, b1.ltft)) : 'percent'
+    };
+    var style2 = {
+      stft: b2.stft ? P66.detectTrimStyle(sampleColumn(rows, b2.stft)) : 'percent',
+      ltft: b2.ltft ? P66.detectTrimStyle(sampleColumn(rows, b2.ltft)) : 'percent'
+    };
+    function bankTrim(b, styles, row) {
+      var stft = b.stft ? P66.trimToPct(num(row[b.stft]), styles.stft) : 0;
+      var ltft = b.ltft ? P66.trimToPct(num(row[b.ltft]), styles.ltft) : 0;
+      return stft + ltft;
+    }
+    var cells = {}; // "rpmBin|mapBin" -> { n1, sum1, n2, sum2 }
+    rows.forEach(function (row) {
+      var rpm = num(row[rpmCol]);
+      var map = num(row[mapCol]);
+      if (rpm === null || map === null) return;
+      var key = rpmBin(rpm) + '|' + mapBin(map);
+      var c = cells[key] || (cells[key] = { n1: 0, sum1: 0, n2: 0, sum2: 0, rpmBin: rpmBin(rpm), mapBin: mapBin(map) });
+      var t1 = bankTrim(b1, style1, row);
+      var t2 = bankTrim(b2, style2, row);
+      // A row counts for a bank only when that bank actually reported.
+      if (b1.stft && num(row[b1.stft]) === null && b1.ltft && num(row[b1.ltft]) === null) { /* no b1 data */ }
+      else { c.n1++; c.sum1 += t1; }
+      if (b2.stft && num(row[b2.stft]) === null && b2.ltft && num(row[b2.ltft]) === null) { /* no b2 data */ }
+      else { c.n2++; c.sum2 += t2; }
+    });
+    var findings = [];
+    Object.keys(cells).forEach(function (key) {
+      var c = cells[key];
+      if (c.n1 < IMBALANCE_MIN_SAMPLES || c.n2 < IMBALANCE_MIN_SAMPLES) return;
+      var avg1 = c.sum1 / c.n1, avg2 = c.sum2 / c.n2;
+      var delta = avg1 - avg2;
+      if (Math.abs(delta) < IMBALANCE_DELTA_PCT) return;
+      var leanBank = delta > 0 ? 1 : 2; // positive trim = ECU adding fuel = lean
+      findings.push({
+        key: key,
+        rpmBin: c.rpmBin,
+        mapBin: c.mapBin,
+        cell: c.rpmBin + ' RPM / ' + c.mapBin + ' kPa',
+        bank1Avg: round2(avg1),
+        bank2Avg: round2(avg2),
+        delta: round2(delta),
+        leanBank: leanBank,
+        samples1: c.n1,
+        samples2: c.n2
+      });
+    });
+    findings.sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
+    return {
+      available: true,
+      findings: findings,
+      findingCount: findings.length,
+      note: findings.length
+        ? findings.length + ' cell(s) show a bank-to-bank trim split ≥ ' + IMBALANCE_DELTA_PCT +
+          '% — diagnose the bank-specific cause before changing VE.'
+        : 'No bank-to-bank trim split ≥ ' + IMBALANCE_DELTA_PCT + '% found.'
     };
   }
 
@@ -465,7 +638,8 @@
       fuelTrims: analyzeFuelTrims(rows, mapResult),
       knock: analyzeKnock(rows, mapResult),
       lambda: analyzeLambda(rows, mapResult),
-      narrowband: analyzeNarrowband(rows, mapResult)
+      narrowband: analyzeNarrowband(rows, mapResult),
+      bankImbalance: analyzeBankImbalance(rows, mapResult)
     };
   }
 
@@ -473,6 +647,8 @@
   function round3(v) { return Math.round(v * 1000) / 1000; }
 
   P66.segmentRows = segmentRows;
+  P66.qualityRows = qualityRows;
+  P66.analyzeBankImbalance = analyzeBankImbalance;
   P66.analyzeFuelTrims = analyzeFuelTrims;
   P66.analyzeKnock = analyzeKnock;
   P66.analyzeLambda = analyzeLambda;
