@@ -119,6 +119,7 @@ P66-Tuner is intended to help tuners and engineers:
 - [x] Bank-imbalance diagnostic — flags bank-to-bank trim splits; tuner cautions instead of mistuning the healthy bank.
 - [x] Cumulative patch ledger (`js/ledger.js`) — multi-session runaway guardrail per source binary.
 - [x] Tune journal (`js/journal.js`) — session notes persisted in the browser, rendered in the dashboard.
+- [x] Altitude/baro awareness (`js/altitude.js`) — altitude setting (default 2840 ft), PCM baro plausibility diagnostic, WOT MAP vs baro sanity check.
 - [ ] Add configurable rule packs for P66 strategies.
 - [ ] Add import/export adapters for common tuning tool formats.
 
