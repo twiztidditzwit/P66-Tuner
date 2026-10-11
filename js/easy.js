@@ -193,7 +193,28 @@
 
     var summary = P66.summarizeTune(sug.actionable, allPatches);
 
-    var html = '<h3>What this tune does</h3>';
+    var html = '';
+    var bi = report.bankImbalance;
+    if (bi && bi.available && bi.findingCount) {
+      html += '<h3>⚠️ Bank imbalance found</h3><p>Bank ' + bi.findings[0].leanBank +
+        ' is running leaner than the other bank in ' + bi.findingCount +
+        ' spot(s) (up to ' + Math.abs(bi.findings[0].delta) + '% split). That usually means ' +
+        'something mechanical — a vacuum leak, an injector, or an O2 sensor — not a tune problem. ' +
+        'Get that checked before flashing fuel changes, or you will mistune the healthy bank.</p>';
+    }
+    if (typeof P66.analyzeCoverage === 'function') {
+      var cov = P66.analyzeCoverage(report);
+      html += '<h3>Log coverage: ' + cov.score + '/100 (' + cov.verdict + ')</h3>';
+      if (cov.driveCycle.length) {
+        html += '<p>Before you trust this tune fully, log this next:</p><ol>';
+        cov.driveCycle.forEach(function (s) { html += '<li>' + esc(s) + '</li>'; });
+        html += '</ol>';
+      } else {
+        html += '<p class="status-ok">Your log covers everything needed — nice driving.</p>';
+      }
+    }
+
+    html += '<h3>What this tune does</h3>';
     html += '<p><strong>' + esc(summary.headline) + '</strong></p>';
     if (summary.bullets.length) {
       html += '<ul>';
@@ -238,6 +259,14 @@
       }
       easyProvenance = (prov && prov.ok) ? prov : null;
       if (prov && prov.ok) {
+        if (typeof P66.createLedger === 'function' && prov.sourceSha256) {
+          var easyLedgerWarnings = P66.createLedger().check(prov.sourceSha256, allPatches);
+          if (easyLedgerWarnings.length) {
+            html += '<p class="status-warn"><strong>Cumulative change guardrail:</strong> ' +
+              easyLedgerWarnings.length + ' cell(s) reach the multi-session limit across your downloaded tunes. ' +
+              'Each tune was capped on its own, but the totals have stacked up — verify the trend before flashing further.</p>';
+          }
+        }
         html += '<h3>Audit trail</h3>';
         html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(prov.sourceSha256) + '</code></p>';
         html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(prov.patchedSha256) + '</code></p>';
@@ -280,6 +309,9 @@
         document.body.appendChild(a);
         a.click();
         setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        if (typeof P66.createLedger === 'function' && easyProvenance && easyProvenance.sourceSha256) {
+          P66.createLedger().record(easyProvenance.sourceSha256, allPatches, { note: 'easy wizard' });
+        }
       });
     }
     var rpt = $('easy-report-btn');

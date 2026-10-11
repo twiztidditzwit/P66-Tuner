@@ -19,6 +19,8 @@
   var modeSelect = document.getElementById('mode');
   var dashParts = {
     heatmap: document.getElementById('heatmap'),
+    coverage: document.getElementById('coverage'),
+    journal: document.getElementById('journal'),
     regions: document.getElementById('region-chart'),
     knock: document.getElementById('knock-chart'),
     lambda: document.getElementById('lambda-chart'),
@@ -49,6 +51,8 @@
   function resetDashboardPlaceholders() {
     var msgs = {
       heatmap: 'Run analysis to render the heatmap.',
+      coverage: 'Run analysis to score log coverage.',
+      journal: 'Run analysis to open the journal.',
       regions: 'Run analysis to render region breakdown.',
       knock: 'Run analysis to render knock events.',
       lambda: 'Run analysis to render the lambda trace.',
@@ -264,6 +268,29 @@
       html += '<p class="muted">' + esc(l.reason || 'No lambda data.') + '</p>';
     }
 
+    // Bank imbalance
+    var bi = report.bankImbalance;
+    html += '<h3>Bank Balance</h3>';
+    if (bi && bi.available) {
+      if (bi.findingCount) {
+        html += '<p class="status-bad"><strong>' + bi.findingCount + ' cell(s) with a bank-to-bank trim split.</strong> ' +
+          'This is usually mechanical (vacuum leak, injector, O2 sensor) — not a VE table problem. ' +
+          'Fix the cause before changing fueling.</p>';
+        html += '<table><thead><tr><th>Cell</th><th>Bank 1 trim</th><th>Bank 2 trim</th><th>|Δ|</th><th>Samples</th></tr></thead><tbody>';
+        bi.findings.slice(0, 8).forEach(function (f) {
+          html += '<tr><td>' + esc(f.cell) + '</td><td>' + (f.bank1Avg > 0 ? '+' : '') + f.bank1Avg + '%</td>' +
+            '<td>' + (f.bank2Avg > 0 ? '+' : '') + f.bank2Avg + '%</td>' +
+            '<td class="status-bad">' + Math.abs(f.delta) + '%</td>' +
+            '<td>' + f.samples1 + '/' + f.samples2 + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      } else {
+        html += '<p class="status-ok">Banks agree — no bank-to-bank trim split found.</p>';
+      }
+    } else {
+      html += '<p class="muted">' + esc((bi && bi.reason) || 'Need both banks’ trim channels for this check.') + '</p>';
+    }
+
     // Narrowband O2
     var nb = report.narrowband;
     html += '<h3>Narrowband O2</h3>';
@@ -300,7 +327,8 @@
       sessionHistory.push(sessionReport);
       if (sessionHistory.length > 10) sessionHistory.shift();
       renderAnalysis(sessionReport);
-      P66.renderDashboard(dashParts, sessionReport, parsedLog, mapResult, sessionHistory);
+      P66.renderDashboard(dashParts, sessionReport, parsedLog, mapResult, sessionHistory,
+        { logName: files.log ? files.log.name : '' });
       writeConsole('Analysis complete: ' + sessionReport.rowCount + ' rows, ' +
         Object.keys(sessionReport.regionDistribution).length + ' regions classified. ' +
         '(session ' + sessionHistory.length + ' in history)');
@@ -439,6 +467,21 @@
               }
             } else {
             lastPatches = { patches: allPatches, patched: finalImage, provenance: provenance };
+            // Cumulative runaway guard: warn when this patch set would push
+            // any cell's multi-session total past the guardrails. Keyed by
+            // source fingerprint, so a different binary starts clean.
+            if (typeof P66.createLedger === 'function' && provenance.sourceSha256) {
+              var ledgerWarnings = P66.createLedger().check(provenance.sourceSha256, allPatches);
+              if (ledgerWarnings.length) {
+                html += '<p class="status-warn"><strong>Cumulative change guardrail:</strong> ' +
+                  ledgerWarnings.length + ' cell(s) reach the multi-session limit across downloaded tunes. ' +
+                  'Each tune was capped on its own, but the totals have stacked up.</p><ul>';
+                ledgerWarnings.slice(0, 8).forEach(function (w) {
+                  html += '<li>' + esc(w.message) + '</li>';
+                });
+                html += '</ul>';
+              }
+            }
             html += '<h3>Binary Patches</h3>';
             html += '<p class="status-ok"><strong>Verification passed:</strong> ' + verification.checked +
               ' patch(es) — addresses in range and inside their table\'s XDF region, ' +
@@ -516,6 +559,11 @@
           URL.revokeObjectURL(a.href);
           a.remove();
         }, 1000);
+        // Record the download in the cumulative ledger: the best available
+        // proxy for "about to flash". Feeds the multi-session guardrail.
+        if (typeof P66.createLedger === 'function' && lastPatches.provenance.sourceSha256) {
+          P66.createLedger().record(lastPatches.provenance.sourceSha256, lastPatches.patches, { note: 'advanced flow' });
+        }
         writeConsole('Patched binary downloaded (' + lastPatches.patches.length + ' patches). No checksum correction applied (none found for P66) — bench-verify before flashing.');
       });
     }

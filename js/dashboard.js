@@ -293,6 +293,44 @@
     container.appendChild(wrap);
   }
 
+  /* ---------- log coverage coach ---------- */
+
+  var VERDICT_WORDS = {
+    excellent: 'Excellent coverage — this log can support a full tune.',
+    good: 'Good coverage — usable, with a few gaps worth filling next time.',
+    thin: 'Thin coverage — tune from this log, but fill the gaps before trusting it fully.',
+    poor: 'Poor coverage — log more driving before tuning from this.'
+  };
+
+  function renderCoverage(container, report) {
+    clear(container);
+    if (typeof P66.analyzeCoverage !== 'function') {
+      emptyMsg(container, 'Coverage module not loaded.');
+      return;
+    }
+    var cov = P66.analyzeCoverage(report);
+    var wrap = document.createElement('div');
+    var sevIcon = { critical: '🛑', warn: '⚠️', info: 'ℹ️' };
+    var html = '<p><strong>Coverage score: ' + cov.score + '/100</strong> — ' +
+      (VERDICT_WORDS[cov.verdict] || cov.verdict) + '</p>';
+    if (cov.gaps.length) {
+      html += '<ul>';
+      cov.gaps.forEach(function (g) {
+        html += '<li>' + (sevIcon[g.severity] || '•') + ' ' + g.detail + '</li>';
+      });
+      html += '</ul>';
+    } else {
+      html += '<p class="status-ok">No gaps found.</p>';
+    }
+    if (cov.driveCycle.length) {
+      html += '<p><strong>What to log next:</strong></p><ol>';
+      cov.driveCycle.forEach(function (s) { html += '<li>' + s + '</li>'; });
+      html += '</ol>';
+    }
+    wrap.innerHTML = html;
+    container.appendChild(wrap);
+  }
+
   /* ---------- session comparison ---------- */
 
   function compareMetrics(prev, curr) {
@@ -354,10 +392,77 @@
     container.innerHTML = html;
   }
 
+  /* ---------- tune journal ---------- */
+
+  function escHtml(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function renderJournal(container, sessionMeta) {
+    if (typeof P66.createJournal !== 'function') {
+      emptyMsg(container, 'Journal module not loaded.');
+      return;
+    }
+    var journal = P66.createJournal();
+    function paint() {
+      clear(container);
+      var wrap = document.createElement('div');
+      var formHtml = '<textarea id="journal-note" rows="2" style="width:100%;box-sizing:border-box;" ' +
+        'placeholder="What did you flash, and what happened? e.g. flashed 10/11 — pulled 2° at 3000rpm, knock gone, idle hunts"></textarea>' +
+        '<p><button id="journal-add" type="button" style="width:auto;">Save note</button></p>';
+      var formDiv = document.createElement('div');
+      formDiv.innerHTML = formHtml;
+      wrap.appendChild(formDiv);
+      var entries = journal.list();
+      if (!entries.length) {
+        var p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = 'No notes yet. After you flash, write down what you changed and what the car did — ' +
+          'the next log only makes sense with these notes.';
+        wrap.appendChild(p);
+      } else {
+        var ul = document.createElement('ul');
+        entries.slice(0, 10).forEach(function (e) {
+          var li = document.createElement('li');
+          var when = e.date ? e.date.slice(0, 10) : '';
+          li.innerHTML = '<strong>' + escHtml(when) + '</strong> ' + escHtml(e.note) +
+            (e.logName ? ' <span class="muted">(' + escHtml(e.logName) + ')</span>' : '') +
+            ' <button type="button" data-jid="' + escHtml(e.id) + '" style="width:auto;padding:0 0.4rem;" title="Delete note">×</button>';
+          ul.appendChild(li);
+        });
+        wrap.appendChild(ul);
+      }
+      container.appendChild(wrap);
+      var addBtn = wrap.querySelector('#journal-add');
+      var noteEl = wrap.querySelector('#journal-note');
+      addBtn.addEventListener('click', function () {
+        var added = journal.add({
+          note: noteEl.value,
+          logName: (sessionMeta && sessionMeta.logName) || '',
+          patchCount: (sessionMeta && sessionMeta.patchCount) || 0,
+          binFingerprint: (sessionMeta && sessionMeta.binFingerprint) || ''
+        });
+        if (added) paint();
+        else noteEl.focus();
+      });
+      Array.prototype.forEach.call(wrap.querySelectorAll('button[data-jid]'), function (b) {
+        b.addEventListener('click', function () {
+          journal.remove(b.getAttribute('data-jid'));
+          paint();
+        });
+      });
+    }
+    paint();
+  }
+
   /* ---------- entry point ---------- */
 
-  function renderDashboard(parts, report, parsedLog, mapResult, history) {
+  function renderDashboard(parts, report, parsedLog, mapResult, history, sessionMeta) {
     if (parts.heatmap) renderHeatmap(parts.heatmap, report.fuelTrims);
+    if (parts.coverage) renderCoverage(parts.coverage, report);
+    if (parts.journal) renderJournal(parts.journal, sessionMeta);
     if (parts.regions) renderRegionBars(parts.regions, report);
     if (parts.knock) renderKnockTimeline(parts.knock, parsedLog.rows, mapResult);
     if (parts.lambda) renderLambdaTrace(parts.lambda, parsedLog.rows, mapResult);
@@ -370,6 +475,8 @@
   P66.renderLambdaTrace = renderLambdaTrace;
   P66.renderRegionBars = renderRegionBars;
   P66.renderComparison = renderComparison;
+  P66.renderCoverage = renderCoverage;
+  P66.renderJournal = renderJournal;
   P66.renderDashboard = renderDashboard;
   P66._trimColor = trimColor;
   P66._sortedBins = sortedBins;

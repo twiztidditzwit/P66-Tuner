@@ -49,13 +49,19 @@
    * When a narrowband report is available, per-cell O2 bias corroborates
    * (or challenges) each suggestion and adjusts confidence.
    */
-  function fuelSuggestions(fuelReport, gates, nbReport) {
+  function fuelSuggestions(fuelReport, gates, nbReport, imbReport) {
     var out = [];
     if (!fuelReport || !fuelReport.available) return out;
     var nbByCell = {};
     if (nbReport && nbReport.available) {
       nbReport.cells.forEach(function (c) {
         nbByCell[c.rpmBin + '|' + c.mapBin] = c;
+      });
+    }
+    var imbByCell = {};
+    if (imbReport && imbReport.available) {
+      imbReport.findings.forEach(function (f) {
+        imbByCell[f.key] = f;
       });
     }
     fuelReport.cells.forEach(function (cell) {
@@ -89,12 +95,23 @@
           if (confidence === 'high') confidence = 'medium';
         }
       }
+      var imbalanceNote = '';
+      var imb = imbByCell[cell.rpmBin + '|' + cell.mapBin];
+      if (imb) {
+        imbalanceNote = ' Bank imbalance: bank ' + imb.leanBank + ' averages ' +
+          (imb.leanBank === 1 ? imb.bank1Avg : imb.bank2Avg) + '% trim vs ' +
+          (imb.leanBank === 1 ? imb.bank2Avg : imb.bank1Avg) + '% on the other bank ' +
+          '(|Δ| ' + Math.abs(imb.delta) + '%). This looks bank-specific (vacuum leak, ' +
+          'injector, O2 sensor) — a global VE change will mistune the healthy bank. ' +
+          'Diagnose the mechanical cause first.';
+        if (confidence === 'high') confidence = 'medium';
+      }
       out.push({
         kind: 'fuel', table: 'VE/MAF', cell: cell.rpmBin + ' RPM / ' + cell.mapBin + ' kPa',
         action: delta > 0 ? 'add fuel' : 'remove fuel', deltaPct: delta,
         reason: 'Avg combined trim ' + (cell.avgTrim > 0 ? '+' : '') + cell.avgTrim +
           '% over ' + cell.samples + ' samples (stddev ' + cell.stddev + ').' +
-          (capped ? ' Capped at mode limit; re-log and iterate.' : '') + corroboration,
+          (capped ? ' Capped at mode limit; re-log and iterate.' : '') + corroboration + imbalanceNote,
         confidence: confidence,
         samples: cell.samples
       });
@@ -340,7 +357,7 @@
     mode = MODES[mode] ? mode : 'conservative';
     var gates = MODES[mode];
     var suggestions = []
-      .concat(fuelSuggestions(report.fuelTrims, gates, report.narrowband))
+      .concat(fuelSuggestions(report.fuelTrims, gates, report.narrowband, report.bankImbalance))
       .concat(sparkSuggestions(report.knock, gates, catalog))
       .concat(peSuggestions(report.lambda, gates));
 
