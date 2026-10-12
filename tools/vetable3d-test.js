@@ -36,7 +36,33 @@ var near = P66._veRotate(0, 5, 0, 0, 0.9);   // tall point
 var far = P66._veRotate(0, 0, 0, 0, 0.9);    // ground point, same x/z
 check('taller point is closer (drawn later)', near.z2 > far.z2);
 
-console.log('3d: surface model');
+console.log('3d: bilinear interpolation');
+var B = P66._veBilinear;
+check('corner (0,0)', approx(B(1, 2, 3, 4, 0, 0), 1));
+check('corner (1,1)', approx(B(1, 2, 3, 4, 1, 1), 4));
+check('edge midpoint', approx(B(0, 10, 20, 30, 0.5, 0), 5));
+check('center', approx(B(0, 10, 20, 30, 0.5, 0.5), 15));
+check('linear along u', approx(B(0, 10, 0, 10, 0.25, 0.7), 2.5));
+
+console.log('3d: face lighting');
+function lightArgs(az, el) {
+  return [Math.cos(az), Math.sin(az), Math.cos(el), Math.sin(el)];
+}
+var flat = P66._veFaceLight(0, 0, 0, 0, Math.cos(0.95), Math.sin(0.95));
+check('flat surface brightness in range', flat > 0.55 && flat <= 1, 'b=' + flat);
+var slope = P66._veFaceLight(3, 0, 0, 0, Math.cos(0.95), Math.sin(0.95));
+check('slope shades differently than flat', Math.abs(slope - flat) > 0.01, 'flat=' + flat + ' slope=' + slope);
+check('brightness bounded [0.55,1] over rotations', (function () {
+  for (var a = 0; a < 6.3; a += 0.7) {
+    for (var e = 0.2; e < 1.45; e += 0.3) {
+      var b2 = P66._veFaceLight(1.5, -2, Math.cos(a), Math.sin(a), Math.cos(e), Math.sin(e));
+      if (!(b2 >= 0.55 && b2 <= 1)) return false;
+    }
+  }
+  return true;
+})());
+
+console.log('3d: surface model (node-based)');
 var catalog = P66.BUNDLED_CATALOG;
 var ve = P66.readTable(catalog, 'Main VE', new Uint8Array(65536));
 var base = ve.base, eb = ve.elementBytes, rows = ve.rows, cols = ve.cols;
@@ -56,23 +82,32 @@ function fuelPatch(r, c, pct) {
 var data = P66.veComparisonData(catalog, bin, [fuelPatch(2, 3, 8), fuelPatch(4, 4, -4)]);
 
 var mChange = P66.veSurfaceModel(data, 'change');
-check('change: cell count matches', mChange.cells.length === rows * cols);
-var bump = mChange.cells.filter(function (x) { return x.r === 2 && x.c === 3; })[0];
-var dip = mChange.cells.filter(function (x) { return x.r === 4 && x.c === 4; })[0];
-var flat = mChange.cells.filter(function (x) { return x.r === 0 && x.c === 0; })[0];
-check('change: positive delta -> h=1 (max)', approx(bump.h, 1), 'h=' + bump.h);
-check('change: negative delta -> h=-0.5', approx(dip.h, -0.5), 'h=' + dip.h);
-check('change: untouched -> h=0', flat.h === 0);
-check('change: colors differ by sign', bump.color !== dip.color);
+check('change: node grid matches table dims',
+  mChange.nodes.length === rows && mChange.nodes[0].length === cols);
+var bump = mChange.nodes[2][3], dip = mChange.nodes[4][4], flatN = mChange.nodes[0][0];
+check('change: positive delta node -> h=1 (max)', approx(bump.h, 1), 'h=' + bump.h);
+check('change: negative delta node -> h=-0.5', approx(dip.h, -0.5), 'h=' + dip.h);
+check('change: untouched node -> h=0', flatN.h === 0);
+check('change: node colors are rgb triples',
+  bump.rgb.length === 3 && dip.rgb.length === 3 && flatN.rgb.length === 3);
+check('change: colors differ by sign',
+  bump.rgb.join() !== dip.rgb.join());
 
 var mBefore = P66.veSurfaceModel(data, 'before');
-var hs = mBefore.cells.map(function (x) { return x.h; });
+var hs = [];
+mBefore.nodes.forEach(function (row) { row.forEach(function (nd) { hs.push(nd.h); }); });
 check('before: heights in [0,1]', Math.min.apply(null, hs) >= 0 && Math.max.apply(null, hs) <= 1);
-check('before: tallest cell is max value corner', approx(Math.max.apply(null, hs), 1));
-check('before: every cell has a color', mBefore.cells.every(function (x) { return !!x.color; }));
+check('before: tallest node is max value corner', approx(Math.max.apply(null, hs), 1));
+check('before: rgb values are bytes',
+  mBefore.nodes.every(function (row) {
+    return row.every(function (nd) {
+      return nd.rgb.every(function (ch) { return ch >= 0 && ch <= 255; });
+    });
+  }));
 
 var mEmpty = P66.veSurfaceModel(P66.veComparisonData(catalog, bin, []), 'change');
-check('change: all flat when no patches', mEmpty.cells.every(function (x) { return x.h === 0; }));
+check('change: all flat when no patches',
+  mEmpty.nodes.every(function (row) { return row.every(function (nd) { return nd.h === 0; }); }));
 
 console.log('\n' + checks + ' checks, ' + failures + ' failures');
 process.exit(failures ? 1 : 0);

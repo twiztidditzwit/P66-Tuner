@@ -707,10 +707,60 @@
   }
 
   /**
+   * Parse a CSS color ('#rrggbb' or 'rgb(r,g,b)') into [r, g, b].
+   * The VE palette helpers return rgb() strings, so handle both.
+   */
+  function cssToRgb(css) {
+    var m = /^#([0-9a-f]{6})$/i.exec(css);
+    if (m) {
+      var n = parseInt(m[1], 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+    m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(css);
+    if (m) return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+    return [35, 44, 58]; // fallback: dark neutral
+  }
+
+  /**
+   * Pure bilinear interpolation (testable).
+   * Corners: a00 at (u=0,v=0), a10 at (1,0), a01 at (0,1), a11 at (1,1).
+   */
+  function veBilinear(a00, a10, a01, a11, u, v) {
+    return a00 * (1 - u) * (1 - v) + a10 * u * (1 - v) +
+           a01 * (1 - u) * v + a11 * u * v;
+  }
+
+  // Fixed camera-space light direction (toward the light), normalized.
+  var VE_LIGHT = (function () {
+    var l = [-0.42, 0.82, 0.39];
+    var n = Math.sqrt(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
+    return [l[0] / n, l[1] / n, l[2] / n];
+  })();
+
+  /**
+   * Pure face brightness (testable): dhdx/dhdz are dy/dx, dy/dz in grid
+   * units. The surface normal is rotated into camera space and dotted
+   * with a fixed camera-space light. Returns 0.55..1.
+   */
+  function veFaceLight(dhdx, dhdz, cosA, sinA, cosE, sinE) {
+    var inv = 1 / Math.sqrt(dhdx * dhdx + 1 + dhdz * dhdz);
+    var nx = -dhdx * inv, ny = inv, nz = -dhdz * inv;
+    var x1 = nx * cosA - nz * sinA;
+    var z1 = nx * sinA + nz * cosA;
+    var y2 = ny * cosE - z1 * sinE;
+    var z2 = ny * sinE + z1 * cosE;
+    var dot = x1 * VE_LIGHT[0] + y2 * VE_LIGHT[1] + z2 * VE_LIGHT[2];
+    if (dot < 0.12) dot = 0.12;
+    if (dot > 1) dot = 1;
+    return 0.55 + 0.45 * dot;
+  }
+
+  /**
    * Pure surface model for the 3D view (testable in node).
    * dataset: 'before' | 'after' | 'change'.
-   * Returns { cells: [{ r, c, h, color }], rows, cols } with h normalized:
-   * before/after -> 0..1, change -> -1..1 (signed).
+   * Returns per-NODE { h, rgb } so the renderer can bilinearly subdivide
+   * into a smooth continuous surface. Node heights: before/after -> 0..1,
+   * change -> -1..1 (signed).
    */
   function veSurfaceModel(data, dataset) {
     var vmin = Infinity, vmax = -Infinity, maxAbs = 0;
@@ -725,24 +775,26 @@
         if (d && Math.abs(d.deltaPct) > maxAbs) maxAbs = Math.abs(d.deltaPct);
       });
     });
-    var cells = [];
+    var nodes = [];
     for (var r = 0; r < data.rows; r++) {
+      var row = [];
       for (var c = 0; c < data.cols; c++) {
         var d = data.deltas[r][c];
-        var h, color;
+        var h, rgb;
         if (dataset === 'change') {
           var dv = d ? d.deltaPct : 0;
           h = maxAbs > 0 ? dv / maxAbs : 0;
-          color = d ? trimColor(Math.max(-10, Math.min(10, dv))) : '#232c3a';
+          rgb = cssToRgb(d ? trimColor(Math.max(-10, Math.min(10, dv))) : '#232c3a');
         } else {
           var v = dataset === 'before' ? data.before[r][c] : data.after[r][c];
           h = (vmax > vmin) ? (v - vmin) / (vmax - vmin) : 0.5;
-          color = veValueColor(v, vmin, vmax);
+          rgb = cssToRgb(veValueColor(v, vmin, vmax));
         }
-        cells.push({ r: r, c: c, h: h, color: color });
+        row.push({ h: h, rgb: rgb });
       }
+      nodes.push(row);
     }
-    return { cells: cells, rows: data.rows, cols: data.cols };
+    return { nodes: nodes, rows: data.rows, cols: data.cols };
   }
 
   /**
@@ -773,6 +825,11 @@
     var AUTO_SPEED = 0.0038; // rad/frame — a full turn takes ~28s
     var raf = 0, stopped = false;
 
+    // Subdivision quality: each table cell becomes KxK sub-quads with
+    // bilinearly interpolated heights/colors for a smooth surface.
+    // Drops automatically if the frame rate sags.
+    var K = 4, emaDt = 16, lastT = 0;
+
     function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
     function proj(x, y, z) {
@@ -785,24 +842,83 @@
       if (stopped) return;
       var now = Date.now();
       if (!dragging && now - lastInteract > 2500) az += AUTO_SPEED;
+
+      if (typeof performance !== 'undefined' && performance.now) {
+        var t = performance.now();
+        if (lastT) {
+          emaDt = emaDt * 0.94 + (t - lastT) * 0.06;
+          if (emaDt > 46 && K > 2) { K--; emaDt = 16; }
+        }
+        lastT = t;
+      }
+
+      var cosA = Math.cos(az), sinA = Math.sin(az);
+      var cosE = Math.cos(el), sinE = Math.sin(el);
+      var s = baseScale * zoom;
+      var ox = W / 2, oy = H / 2 + 14;
+
       ctx.clearRect(0, 0, W, H);
       var m = veSurfaceModel(data, getDataset());
-      var byCell = {};
-      m.cells.forEach(function (cell) { byCell[cell.r + ',' + cell.c] = cell; });
+      var nodes = m.nodes;
 
-      var faces = [];
-      for (var r = 0; r < rows; r++) {
-        for (var c = 0; c < cols; c++) {
-          var cell = byCell[r + ',' + c];
-          var y = cell.h * heightScale;
-          var corners = [
-            proj(c, y, r), proj(c + 1, y, r),
-            proj(c + 1, y, r + 1), proj(c, y, r + 1)
-          ];
-          var depth = (corners[0].depth + corners[1].depth + corners[2].depth + corners[3].depth) / 4;
-          faces.push({ corners: corners, depth: depth, color: cell.color });
+      // Subdivided vertex grid shared between sub-quads (no cracks).
+      var vR = (rows - 1) * K + 1, vC = (cols - 1) * K + 1;
+      var nv = vR * vC;
+      var sx = new Array(nv), sy = new Array(nv), dep = new Array(nv);
+      var vr = new Array(nv), vg = new Array(nv), vb = new Array(nv);
+      var idx = 0;
+      for (var vi = 0; vi < vR; vi++) {
+        var r0 = Math.min((vi / K) | 0, rows - 2), fv = vi / K - r0, r1 = r0 + 1;
+        for (var vj = 0; vj < vC; vj++) {
+          var c0 = Math.min((vj / K) | 0, cols - 2), fu = vj / K - c0, c1 = c0 + 1;
+          var n00 = nodes[r0][c0], n10 = nodes[r0][c1];
+          var n01 = nodes[r1][c0], n11 = nodes[r1][c1];
+          var h = veBilinear(n00.h, n10.h, n01.h, n11.h, fu, fv);
+          var y = h * heightScale;
+          var x = (c0 + fu) - cx0, z = (r0 + fv) - cz0;
+          var x1 = x * cosA - z * sinA;
+          var z1 = x * sinA + z * cosA;
+          var y2 = y * cosE - z1 * sinE;
+          var z2 = y * sinE + z1 * cosE;
+          sx[idx] = ox + x1 * s;
+          sy[idx] = oy - y2 * s;
+          dep[idx] = z2;
+          vr[idx] = veBilinear(n00.rgb[0], n10.rgb[0], n01.rgb[0], n11.rgb[0], fu, fv);
+          vg[idx] = veBilinear(n00.rgb[1], n10.rgb[1], n01.rgb[1], n11.rgb[1], fu, fv);
+          vb[idx] = veBilinear(n00.rgb[2], n10.rgb[2], n01.rgb[2], n11.rgb[2], fu, fv);
+          idx++;
         }
       }
+
+      var faces = [];
+      for (var cr = 0; cr < rows - 1; cr++) {
+        for (var cc = 0; cc < cols - 1; cc++) {
+          var h00 = nodes[cr][cc].h, h10 = nodes[cr][cc + 1].h;
+          var h01 = nodes[cr + 1][cc].h, h11 = nodes[cr + 1][cc + 1].h;
+          for (var i = 0; i < K; i++) {
+            for (var j = 0; j < K; j++) {
+              var a = (cr * K + i) * vC + (cc * K + j);
+              var b = a + 1, c2 = a + vC + 1, d2 = a + vC;
+              var uc = (j + 0.5) / K, vc = (i + 0.5) / K;
+              // Analytic slope of the bilinear patch at the sub-quad center.
+              var dhdu = (h10 - h00) * (1 - vc) + (h11 - h01) * vc;
+              var dhdv = (h01 - h00) * (1 - uc) + (h11 - h10) * uc;
+              var bright = veFaceLight(dhdu * heightScale, dhdv * heightScale,
+                                       cosA, sinA, cosE, sinE);
+              var fr = (vr[a] + vr[b] + vr[c2] + vr[d2]) * 0.25 * bright;
+              var fg = (vg[a] + vg[b] + vg[c2] + vg[d2]) * 0.25 * bright;
+              var fb = (vb[a] + vb[b] + vb[c2] + vb[d2]) * 0.25 * bright;
+              faces.push({
+                a: a, b: b, c: c2, d: d2,
+                depth: (dep[a] + dep[b] + dep[c2] + dep[d2]) * 0.25,
+                color: 'rgb(' + (fr | 0) + ',' + (fg | 0) + ',' + (fb | 0) + ')'
+              });
+            }
+          }
+        }
+      }
+      faces.sort(function (p, q) { return p.depth - q.depth; }); // far first
+
       // Zero plane for the change view: translucent reference, drawn first.
       var dataset = getDataset();
       if (dataset === 'change') {
@@ -813,17 +929,17 @@
         ctx.fillStyle = 'rgba(120,140,170,0.10)';
         ctx.fill();
       }
-      faces.sort(function (a, b) { return a.depth - b.depth; }); // far first
-      faces.forEach(function (f) {
+      for (var fi = 0; fi < faces.length; fi++) {
+        var f = faces[fi];
         ctx.beginPath();
-        f.corners.forEach(function (p, i) { if (i) ctx.lineTo(p.sx, p.sy); else ctx.moveTo(p.sx, p.sy); });
+        ctx.moveTo(sx[f.a], sy[f.a]);
+        ctx.lineTo(sx[f.b], sy[f.b]);
+        ctx.lineTo(sx[f.c], sy[f.c]);
+        ctx.lineTo(sx[f.d], sy[f.d]);
         ctx.closePath();
         ctx.fillStyle = f.color;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-      });
+      }
 
       // Axis labels: RPM along z, MAP along x, ticks at min/mid/max.
       ctx.fillStyle = '#9fa9b8';
@@ -912,6 +1028,8 @@
   P66.veSurfaceModel = veSurfaceModel;
   P66.renderVeSurface = renderVeSurface;
   P66._veRotate = veRotate;
+  P66._veBilinear = veBilinear;
+  P66._veFaceLight = veFaceLight;
   P66.renderDashboard = renderDashboard;
   P66._trimColor = trimColor;
   P66._sortedBins = sortedBins;
