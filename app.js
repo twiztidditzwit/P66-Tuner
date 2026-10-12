@@ -59,14 +59,18 @@
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     var videos = Array.prototype.slice.call(document.querySelectorAll('.bg-video'));
     if (videos.length < 2) return;
-    var FADE = 1.4, active = 0, fading = false;
-    videos.forEach(function (v, i) {
+    var PLAYBACK_RATE = 0.5;   // slow drift: the 10s clip becomes a 20s loop
+    var WALL_FADE = 1.4;       // crossfade length in wall-clock seconds
+    var FADE = WALL_FADE * PLAYBACK_RATE; // ...in video seconds
+    var active = 0, fading = false;
+    videos.forEach(function (v) {
+      try { v.playbackRate = PLAYBACK_RATE; } catch (e) {}
       v.addEventListener('timeupdate', function () {
-        if (i !== active || fading || !v.duration || v.duration === Infinity) return;
+        if (v !== videos[active] || fading || !v.duration || v.duration === Infinity) return;
         if (v.duration - v.currentTime <= FADE) {
           fading = true;
-          var next = videos[1 - i];
-          active = 1 - i;
+          var next = videos[active === 0 ? 1 : 0];
+          active = active === 0 ? 1 : 0;
           try { next.currentTime = 0; } catch (e) {}
           var p = next.play();
           if (p && typeof p.catch === 'function') p.catch(function () {});
@@ -75,10 +79,141 @@
           setTimeout(function () {
             try { v.pause(); v.currentTime = 0; } catch (e) {}
             fading = false;
-          }, FADE * 1000 + 250);
+          }, WALL_FADE * 1000 + 250);
         }
       });
     });
+  })();
+
+  // Rain on the windshield: droplets bead up on the glass, then trail
+  // down with a wobble, absorbing smaller drops as they go. Full-viewport
+  // canvas above the UI; pointer-events:none so clicks pass through.
+  (function rainOnGlass() {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var canvas = document.createElement('canvas');
+    canvas.className = 'rain-canvas';
+    canvas.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(canvas);
+    var ctx = canvas.getContext('2d');
+    var W = 0, H = 0;
+
+    function resize() {
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = window.innerWidth; H = window.innerHeight;
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Pre-rendered drop sprites: faint body ring + specular highlight.
+    function makeDropSprite(r) {
+      var s = Math.ceil(r * 2 + 4);
+      var c = document.createElement('canvas');
+      c.width = c.height = s;
+      var g = c.getContext('2d');
+      var cx = s / 2, cy = s / 2;
+      var body = g.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
+      body.addColorStop(0, 'rgba(200,220,240,0.05)');
+      body.addColorStop(0.75, 'rgba(180,200,225,0.10)');
+      body.addColorStop(0.92, 'rgba(220,235,250,0.35)');
+      body.addColorStop(1, 'rgba(220,235,250,0)');
+      g.fillStyle = body;
+      g.beginPath(); g.arc(cx, cy, r, 0, 6.3); g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.75)';
+      g.beginPath(); g.arc(cx - r * 0.35, cy - r * 0.38, Math.max(0.7, r * 0.22), 0, 6.3); g.fill();
+      return c;
+    }
+    var SPRITES = [1.5, 2.5, 4, 6.5].map(makeDropSprite);
+
+    function rand(a, b) { return a + Math.random() * (b - a); }
+
+    var statics = [];
+    var runners = [];
+    var MAX_STATIC = 70, MAX_RUNNERS = 7;
+
+    function spawnStatic(px, py, instant) {
+      var d = {
+        x: px === undefined ? rand(0, W) : px,
+        y: py === undefined ? rand(0, H) : py,
+        r: rand(1.2, 3),
+        a: 0,
+        targetA: rand(0.35, 0.8),
+        tw: rand(0, 6.28)
+      };
+      if (instant) d.a = d.targetA;
+      statics.push(d);
+    }
+    function spawnRunner() {
+      runners.push({
+        x: rand(0, W), y: rand(-30, H * 0.25),
+        r: rand(3.5, 6),
+        vy: rand(30, 70),
+        wob: rand(0, 6.28),
+        wobF: rand(1.5, 3.5),
+        trail: []
+      });
+    }
+    var i;
+    for (i = 0; i < MAX_STATIC; i++) spawnStatic(undefined, undefined, true);
+    for (i = 0; i < MAX_RUNNERS; i++) spawnRunner();
+
+    var last = 0;
+    function frame(t) {
+      requestAnimationFrame(frame);
+      if (!last) last = t;
+      var dt = Math.min((t - last) / 1000, 0.05);
+      last = t;
+      ctx.clearRect(0, 0, W, H);
+
+      // fresh drops keep hitting the glass
+      if (statics.length < MAX_STATIC && Math.random() < 0.25) spawnStatic();
+
+      var d, r, k, m;
+      for (i = statics.length - 1; i >= 0; i--) {
+        d = statics[i];
+        if (d.a < d.targetA) d.a = Math.min(d.targetA, d.a + dt * 1.5);
+        var shimmer = 0.85 + 0.15 * Math.sin(t / 900 + d.tw);
+        var spr = SPRITES[d.r < 2 ? 0 : 1];
+        ctx.globalAlpha = d.a * shimmer;
+        var s = spr.width / 2;
+        ctx.drawImage(spr, d.x - s, d.y - s);
+      }
+      ctx.globalAlpha = 1;
+
+      for (i = runners.length - 1; i >= 0; i--) {
+        r = runners[i];
+        r.vy = Math.min(r.vy + dt * 26, 170);
+        r.y += r.vy * dt;
+        r.wob += dt * r.wobF;
+        var rx = r.x + Math.sin(r.wob) * 9;
+        r.trail.push({ x: rx, y: r.y });
+        if (r.trail.length > 14) r.trail.shift();
+        // absorb nearby static drops, grow slightly
+        for (k = statics.length - 1; k >= 0; k--) {
+          var sd = statics[k];
+          var dx = sd.x - rx, dy = sd.y - r.y;
+          if (dx * dx + dy * dy < (r.r + 4) * (r.r + 4)) {
+            statics.splice(k, 1);
+            r.r = Math.min(r.r + 0.12, 8);
+          }
+        }
+        // fading trail stamps
+        for (m = 0; m < r.trail.length; m++) {
+          var p = r.trail[m];
+          ctx.globalAlpha = 0.28 * (m / r.trail.length);
+          var ts = SPRITES[0], hs = ts.width / 2;
+          ctx.drawImage(ts, p.x - hs, p.y - hs);
+        }
+        ctx.globalAlpha = 0.9;
+        var hspr = SPRITES[r.r < 5 ? 2 : 3], hh = hspr.width / 2;
+        ctx.drawImage(hspr, rx - hh, r.y - hh * 1.25, hspr.width, hspr.height * 1.25);
+        ctx.globalAlpha = 1;
+        if (r.y > H + 30) { runners.splice(i, 1); spawnRunner(); }
+      }
+    }
+    requestAnimationFrame(frame);
   })();
 
   // Background video: if the asset file is missing (e.g. a clone without
