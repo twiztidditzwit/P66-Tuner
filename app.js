@@ -59,7 +59,8 @@
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     var videos = Array.prototype.slice.call(document.querySelectorAll('.bg-video'));
     if (videos.length < 2) return;
-    var PLAYBACK_RATE = 0.5;   // slow drift: the 10s clip becomes a 20s loop
+    var PLAYBACK_RATE = 1.0;   // the file itself is a 20s slow-motion render;
+                             // keep playback at 1x so frames stay buttery
     var WALL_FADE = 1.4;       // crossfade length in wall-clock seconds
     var FADE = WALL_FADE * PLAYBACK_RATE; // ...in video seconds
     var active = 0, fading = false;
@@ -97,66 +98,161 @@
     var ctx = canvas.getContext('2d');
     var W = 0, H = 0;
 
+    // Offscreen trail layer (half res): wet trails persist and fade slowly.
+    var SCALE = 0.5;
+    var trailC = document.createElement('canvas');
+    var tg = trailC.getContext('2d');
+
     function resize() {
       var dpr = Math.min(window.devicePixelRatio || 1, 2);
       W = window.innerWidth; H = window.innerHeight;
       canvas.width = Math.round(W * dpr);
       canvas.height = Math.round(H * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      trailC.width = Math.max(2, Math.round(W * SCALE));
+      trailC.height = Math.max(2, Math.round(H * SCALE));
     }
     resize();
     window.addEventListener('resize', resize);
 
-    // Pre-rendered drop sprites: faint body ring + specular highlight.
+    // Wetness grid: coarse physics map so water follows water.
+    var GW = 64, GH = 36;
+    var wet = new Float32Array(GW * GH);
+    function addWet(x, y, r, amt) {
+      var gx = Math.floor(x / W * GW), gy = Math.floor(y / H * GH);
+      var gr = Math.max(1, Math.ceil(r / W * GW * 2));
+      for (var oy = -gr; oy <= gr; oy++) {
+        for (var ox = -gr; ox <= gr; ox++) {
+          var ix = gx + ox, iy = gy + oy;
+          if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) continue;
+          if (ox * ox + oy * oy > gr * gr) continue;
+          var k = iy * GW + ix;
+          wet[k] = Math.min(1, wet[k] + amt);
+        }
+      }
+    }
+    function wetAt(x, y) {
+      var gx = Math.floor(x / W * GW), gy = Math.floor(y / H * GH);
+      if (gx < 0 || gy < 0 || gx >= GW || gy >= GH) return 0;
+      return wet[gy * GW + gx];
+    }
+    function pickWetSpot() {
+      for (var t = 0; t < 24; t++) {
+        var gx = (Math.random() * GW) | 0, gy = (Math.random() * GH) | 0;
+        var w = wet[gy * GW + gx];
+        if (w > 0.25 && Math.random() < w) {
+          return { x: (gx + 0.5) / GW * W, y: (gy + 0.5) / GH * H };
+        }
+      }
+      return null;
+    }
+
+    // Lens-like drop sprite: contact shadow, bright rim, refracted dim
+    // center, inverted glint, specular highlight.
     function makeDropSprite(r) {
-      var s = Math.ceil(r * 2 + 4);
+      var pad = Math.ceil(r * 0.9);
+      var s = Math.ceil(r * 2 + pad * 2);
       var c = document.createElement('canvas');
       c.width = c.height = s;
       var g = c.getContext('2d');
       var cx = s / 2, cy = s / 2;
-      var body = g.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
-      body.addColorStop(0, 'rgba(200,220,240,0.05)');
-      body.addColorStop(0.75, 'rgba(180,200,225,0.10)');
-      body.addColorStop(0.92, 'rgba(220,235,250,0.35)');
-      body.addColorStop(1, 'rgba(220,235,250,0)');
+      var sh = g.createRadialGradient(cx + r * 0.18, cy + r * 0.3, r * 0.2,
+                                      cx + r * 0.18, cy + r * 0.3, r * 1.15);
+      sh.addColorStop(0, 'rgba(5,8,14,0.30)');
+      sh.addColorStop(1, 'rgba(5,8,14,0)');
+      g.fillStyle = sh;
+      g.beginPath(); g.arc(cx + r * 0.18, cy + r * 0.3, r * 1.15, 0, 6.3); g.fill();
+      var body = g.createRadialGradient(cx, cy, r * 0.15, cx, cy, r);
+      body.addColorStop(0, 'rgba(150,175,205,0.16)');
+      body.addColorStop(0.62, 'rgba(170,195,225,0.10)');
+      body.addColorStop(0.86, 'rgba(215,232,250,0.42)');
+      body.addColorStop(1, 'rgba(215,232,250,0)');
       g.fillStyle = body;
       g.beginPath(); g.arc(cx, cy, r, 0, 6.3); g.fill();
-      g.fillStyle = 'rgba(255,255,255,0.75)';
-      g.beginPath(); g.arc(cx - r * 0.35, cy - r * 0.38, Math.max(0.7, r * 0.22), 0, 6.3); g.fill();
-      return c;
+      var glint = g.createRadialGradient(cx, cy + r * 0.42, 0, cx, cy + r * 0.42, r * 0.5);
+      glint.addColorStop(0, 'rgba(235,244,255,0.5)');
+      glint.addColorStop(1, 'rgba(235,244,255,0)');
+      g.fillStyle = glint;
+      g.beginPath(); g.arc(cx, cy + r * 0.42, r * 0.5, 0, 6.3); g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.85)';
+      g.beginPath(); g.arc(cx - r * 0.34, cy - r * 0.36, Math.max(0.6, r * 0.2), 0, 6.3); g.fill();
+      return { c: c, half: s / 2 };
     }
-    var SPRITES = [1.5, 2.5, 4, 6.5].map(makeDropSprite);
+    var SPRITES = [1.1, 2.2, 3.6, 6].map(makeDropSprite);
+
+    function makeTrailSprite() {
+      var r = 3, s = r * 2 + 4;
+      var c = document.createElement('canvas');
+      c.width = c.height = s;
+      var g = c.getContext('2d');
+      var cx = s / 2, cy = s / 2;
+      var b = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+      b.addColorStop(0, 'rgba(8,12,20,0.20)');
+      b.addColorStop(0.7, 'rgba(8,12,20,0.12)');
+      b.addColorStop(1, 'rgba(8,12,20,0)');
+      g.fillStyle = b;
+      g.beginPath(); g.arc(cx, cy, r, 0, 6.3); g.fill();
+      return { c: c, half: s / 2 };
+    }
+    var TRAIL_SPRITE = makeTrailSprite();
 
     function rand(a, b) { return a + Math.random() * (b - a); }
 
-    var statics = [];
-    var runners = [];
-    var MAX_STATIC = 70, MAX_RUNNERS = 7;
+    var statics = [], mists = [], runners = [], ripples = [];
+    var MAX_STATIC = 60, MAX_MIST = 130, MAX_RUNNERS = 7;
 
-    function spawnStatic(px, py, instant) {
-      var d = {
-        x: px === undefined ? rand(0, W) : px,
-        y: py === undefined ? rand(0, H) : py,
-        r: rand(1.2, 3),
-        a: 0,
-        targetA: rand(0.35, 0.8),
-        tw: rand(0, 6.28)
-      };
+    function spawnStatic(instant) {
+      var d = { x: rand(0, W), y: rand(0, H), r: rand(1.4, 3.2),
+        a: 0, targetA: rand(0.4, 0.85), tw: rand(0, 6.28) };
       if (instant) d.a = d.targetA;
+      else ripples.push({ x: d.x, y: d.y, r: d.r, age: 0 });
       statics.push(d);
     }
+    function spawnMist(instant) {
+      var d = { x: rand(0, W), y: rand(0, H), r: rand(0.6, 1.3),
+        a: 0, targetA: rand(0.15, 0.4), tw: rand(0, 6.28) };
+      if (instant) d.a = d.targetA;
+      mists.push(d);
+    }
     function spawnRunner() {
+      var spot = Math.random() < 0.55 ? pickWetSpot() : null;
       runners.push({
-        x: rand(0, W), y: rand(-30, H * 0.25),
-        r: rand(3.5, 6),
-        vy: rand(30, 70),
-        wob: rand(0, 6.28),
-        wobF: rand(1.5, 3.5),
+        x: spot ? spot.x + rand(-8, 8) : rand(0, W),
+        y: spot ? spot.y : rand(-30, H * 0.2),
+        r: rand(3.2, 5.5),
+        vy: rand(25, 60), vx: 0,
+        wob: rand(0, 6.28), wobF: rand(1.2, 3),
         trail: []
       });
     }
+
+    function absorb(rx, ry, r) {
+      var rr = r.r + 5, rr2 = rr * rr, i, d, dx, dy;
+      for (i = statics.length - 1; i >= 0; i--) {
+        d = statics[i]; dx = d.x - rx; dy = d.y - ry;
+        if (dx * dx + dy * dy < rr2) { statics.splice(i, 1); r.r = Math.min(r.r + 0.1, 7.5); }
+      }
+      for (i = mists.length - 1; i >= 0; i--) {
+        d = mists[i]; dx = d.x - rx; dy = d.y - ry;
+        if (dx * dx + dy * dy < rr2) mists.splice(i, 1);
+      }
+    }
+
+    function drawDots(list, t) {
+      for (var i = list.length - 1; i >= 0; i--) {
+        var d = list[i];
+        if (d.a < d.targetA) d.a = Math.min(d.targetA, d.a + 0.03);
+        var shimmer = 0.85 + 0.15 * Math.sin(t / 900 + d.tw);
+        var spr = SPRITES[d.r < 1.6 ? 0 : (d.r < 2.7 ? 1 : 2)];
+        ctx.globalAlpha = d.a * shimmer;
+        ctx.drawImage(spr.c, d.x - spr.half, d.y - spr.half);
+      }
+      ctx.globalAlpha = 1;
+    }
+
     var i;
-    for (i = 0; i < MAX_STATIC; i++) spawnStatic(undefined, undefined, true);
+    for (i = 0; i < MAX_STATIC; i++) spawnStatic(true);
+    for (i = 0; i < MAX_MIST; i++) spawnMist(true);
     for (i = 0; i < MAX_RUNNERS; i++) spawnRunner();
 
     var last = 0;
@@ -167,50 +263,73 @@
       last = t;
       ctx.clearRect(0, 0, W, H);
 
-      // fresh drops keep hitting the glass
-      if (statics.length < MAX_STATIC && Math.random() < 0.25) spawnStatic();
+      // wet trails linger: slow-fade the trail layer (~15s half-life feel)
+      tg.globalCompositeOperation = 'destination-out';
+      tg.fillStyle = 'rgba(0,0,0,' + (dt * 0.05).toFixed(4) + ')';
+      tg.fillRect(0, 0, trailC.width, trailC.height);
+      tg.globalCompositeOperation = 'source-over';
 
-      var d, r, k, m;
-      for (i = statics.length - 1; i >= 0; i--) {
-        d = statics[i];
-        if (d.a < d.targetA) d.a = Math.min(d.targetA, d.a + dt * 1.5);
-        var shimmer = 0.85 + 0.15 * Math.sin(t / 900 + d.tw);
-        var spr = SPRITES[d.r < 2 ? 0 : 1];
-        ctx.globalAlpha = d.a * shimmer;
-        var s = spr.width / 2;
-        ctx.drawImage(spr, d.x - s, d.y - s);
+      var decay = Math.pow(0.955, dt), wi;
+      for (wi = 0; wi < wet.length; wi++) wet[wi] *= decay;
+
+      if (statics.length < MAX_STATIC && Math.random() < 0.3) spawnStatic(false);
+      if (mists.length < MAX_MIST && Math.random() < 0.4) spawnMist(false);
+
+      // persistent wet trails under everything
+      ctx.drawImage(trailC, 0, 0, W, H);
+
+      // impact ripples where drops landed
+      for (var ri = ripples.length - 1; ri >= 0; ri--) {
+        var rp = ripples[ri];
+        rp.age += dt;
+        var rl = rp.age / 0.45;
+        if (rl >= 1) { ripples.splice(ri, 1); continue; }
+        ctx.globalAlpha = 0.22 * (1 - rl);
+        ctx.strokeStyle = 'rgba(220,235,250,0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(rp.x, rp.y, rp.r + rl * 9, 0, 6.3);
+        ctx.stroke();
       }
       ctx.globalAlpha = 1;
 
+      drawDots(mists, t);
+      drawDots(statics, t);
+
       for (i = runners.length - 1; i >= 0; i--) {
-        r = runners[i];
-        r.vy = Math.min(r.vy + dt * 26, 170);
+        var r = runners[i];
+        // steer toward wetness ahead: water follows water
+        var aheadY = r.y + 26;
+        var wl = wetAt(r.x - 18, aheadY), wr = wetAt(r.x + 18, aheadY);
+        r.vx += ((wr - wl) * 90 - r.vx * 3) * dt;
+        r.vy = Math.min(r.vy + dt * 30, 175);
+        r.x += r.vx * dt;
         r.y += r.vy * dt;
         r.wob += dt * r.wobF;
-        var rx = r.x + Math.sin(r.wob) * 9;
+        var rx = r.x + Math.sin(r.wob) * 8;
         r.trail.push({ x: rx, y: r.y });
-        if (r.trail.length > 14) r.trail.shift();
-        // absorb nearby static drops, grow slightly
-        for (k = statics.length - 1; k >= 0; k--) {
-          var sd = statics[k];
-          var dx = sd.x - rx, dy = sd.y - r.y;
-          if (dx * dx + dy * dy < (r.r + 4) * (r.r + 4)) {
-            statics.splice(k, 1);
-            r.r = Math.min(r.r + 0.12, 8);
-          }
-        }
-        // fading trail stamps
-        for (m = 0; m < r.trail.length; m++) {
+        if (r.trail.length > 10) r.trail.shift();
+        // stamp the persistent trail + wetness grid
+        tg.globalAlpha = 0.5;
+        tg.drawImage(TRAIL_SPRITE.c, rx * SCALE - TRAIL_SPRITE.half, r.y * SCALE - TRAIL_SPRITE.half);
+        tg.globalAlpha = 1;
+        addWet(rx, r.y, r.r * 2.2, 0.5);
+        absorb(rx, r.y, r);
+        // fresh glints along the new trail
+        for (var m = 0; m < r.trail.length; m++) {
           var p = r.trail[m];
-          ctx.globalAlpha = 0.28 * (m / r.trail.length);
-          var ts = SPRITES[0], hs = ts.width / 2;
-          ctx.drawImage(ts, p.x - hs, p.y - hs);
+          ctx.globalAlpha = 0.30 * (m / r.trail.length);
+          var tsp = SPRITES[0];
+          ctx.drawImage(tsp.c, p.x - tsp.half, p.y - tsp.half);
         }
-        ctx.globalAlpha = 0.9;
-        var hspr = SPRITES[r.r < 5 ? 2 : 3], hh = hspr.width / 2;
-        ctx.drawImage(hspr, rx - hh, r.y - hh * 1.25, hspr.width, hspr.height * 1.25);
+        // head stretches with speed
+        var stretch = 1 + Math.min(r.vy / 160, 0.8) * 0.55;
+        var hspr = SPRITES[r.r < 4.6 ? 2 : 3];
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(hspr.c, rx - hspr.half, r.y - hspr.half * stretch,
+                      hspr.c.width, hspr.c.height * stretch);
         ctx.globalAlpha = 1;
-        if (r.y > H + 30) { runners.splice(i, 1); spawnRunner(); }
+        if (r.y > H + 30 || r.x < -40 || r.x > W + 40) { runners.splice(i, 1); spawnRunner(); }
       }
     }
     requestAnimationFrame(frame);
