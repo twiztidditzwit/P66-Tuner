@@ -513,6 +513,11 @@
   }
 
   function renderVeComparison(container, catalog, binBytes, patches) {
+    // Stop any previous 3D loop: the old canvas is detached after clear().
+    if (container._veStop) {
+      try { container._veStop(); } catch (e) { /* ignore */ }
+      container._veStop = null;
+    }
     clear(container);
     var data = veComparisonData(catalog, binBytes, patches);
     if (data.error) {
@@ -549,18 +554,24 @@
 
     var toggle = document.createElement('p');
     toggle.className = 've-toggle';
-    ['before', 'after', 'change'].forEach(function (view, i) {
+    var VIEWS = [
+      { key: 'before', label: 'Before' },
+      { key: 'after', label: 'After' },
+      { key: 'change', label: 'Change' },
+      { key: '3d', label: '3D' }
+    ];
+    VIEWS.forEach(function (v) {
       var btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = view === 'change' ? 'Change' : (view === 'before' ? 'Before' : 'After');
-      btn.setAttribute('data-view', view);
-      if (view === 'change') btn.classList.add('active');
+      btn.textContent = v.label;
+      btn.setAttribute('data-view', v.key);
+      if (v.key === 'change') btn.classList.add('active');
       btn.addEventListener('click', function () {
         Array.prototype.forEach.call(toggle.querySelectorAll('button'), function (x) {
           x.classList.remove('active');
         });
         btn.classList.add('active');
-        paint(view);
+        paint(v.key);
       });
       toggle.appendChild(btn);
     });
@@ -584,7 +595,15 @@
     }
 
     function paint(view) {
+      if (container._veStop) {
+        try { container._veStop(); } catch (e) { /* ignore */ }
+        container._veStop = null;
+      }
       gridBox.innerHTML = '';
+      if (view === '3d') {
+        paint3D();
+        return;
+      }
       var table = document.createElement('table');
       table.className = 've-grid';
       var thead = document.createElement('thead');
@@ -638,7 +657,234 @@
       gridBox.appendChild(table);
     }
 
+    function paint3D() {
+      var dataset = 'change';
+      var dsWrap = document.createElement('p');
+      dsWrap.className = 've-toggle';
+      [['before', 'Before'], ['after', 'After'], ['change', 'Change']].forEach(function (ds) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = ds[1];
+        if (ds[0] === dataset) b.classList.add('active');
+        b.addEventListener('click', function () {
+          dataset = ds[0];
+          Array.prototype.forEach.call(dsWrap.querySelectorAll('button'), function (x) {
+            x.classList.remove('active');
+          });
+          b.classList.add('active');
+        });
+        dsWrap.appendChild(b);
+      });
+      gridBox.appendChild(dsWrap);
+      var canvas = document.createElement('canvas');
+      gridBox.appendChild(canvas);
+      var hint = document.createElement('p');
+      hint.className = 'muted';
+      hint.textContent = 'Drag to rotate · scroll to zoom · slowly auto-rotates when idle';
+      gridBox.appendChild(hint);
+      try {
+        container._veStop = renderVeSurface(canvas, data, function () { return dataset; });
+      } catch (e) {
+        gridBox.innerHTML = '<p class="muted">3D view unavailable: ' + (e && e.message ? e.message : e) + '</p>';
+      }
+    }
+
     paint('change');
+  }
+
+  /* ---------- VE table 3D surface ---------- */
+
+  /**
+   * Pure rotation helper (testable): azimuth about Y, then elevation about X.
+   * Returns camera-space { x1, y2, z2 }; larger z2 = closer to viewer.
+   */
+  function veRotate(x, y, z, az, el) {
+    var cosA = Math.cos(az), sinA = Math.sin(az);
+    var x1 = x * cosA - z * sinA;
+    var z1 = x * sinA + z * cosA;
+    var cosE = Math.cos(el), sinE = Math.sin(el);
+    return { x1: x1, y2: y * cosE - z1 * sinE, z2: y * sinE + z1 * cosE };
+  }
+
+  /**
+   * Pure surface model for the 3D view (testable in node).
+   * dataset: 'before' | 'after' | 'change'.
+   * Returns { cells: [{ r, c, h, color }], rows, cols } with h normalized:
+   * before/after -> 0..1, change -> -1..1 (signed).
+   */
+  function veSurfaceModel(data, dataset) {
+    var vmin = Infinity, vmax = -Infinity, maxAbs = 0;
+    data.before.forEach(function (row) {
+      row.forEach(function (v) {
+        if (v < vmin) vmin = v;
+        if (v > vmax) vmax = v;
+      });
+    });
+    data.deltas.forEach(function (row) {
+      row.forEach(function (d) {
+        if (d && Math.abs(d.deltaPct) > maxAbs) maxAbs = Math.abs(d.deltaPct);
+      });
+    });
+    var cells = [];
+    for (var r = 0; r < data.rows; r++) {
+      for (var c = 0; c < data.cols; c++) {
+        var d = data.deltas[r][c];
+        var h, color;
+        if (dataset === 'change') {
+          var dv = d ? d.deltaPct : 0;
+          h = maxAbs > 0 ? dv / maxAbs : 0;
+          color = d ? trimColor(Math.max(-10, Math.min(10, dv))) : '#232c3a';
+        } else {
+          var v = dataset === 'before' ? data.before[r][c] : data.after[r][c];
+          h = (vmax > vmin) ? (v - vmin) / (vmax - vmin) : 0.5;
+          color = veValueColor(v, vmin, vmax);
+        }
+        cells.push({ r: r, c: c, h: h, color: color });
+      }
+    }
+    return { cells: cells, rows: data.rows, cols: data.cols };
+  }
+
+  /**
+   * Interactive 3D VE surface on a canvas. No dependencies — hand-rolled
+   * orthographic projection on canvas 2D, so the offline zip still works.
+   * Slow auto-rotate, drag to rotate, scroll to zoom. Returns stop().
+   */
+  function renderVeSurface(canvas, data, getDataset) {
+    var ctx = canvas.getContext('2d');
+    var DPR = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    var W = 620, H = 440;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    canvas.style.width = '100%';
+    canvas.style.maxWidth = W + 'px';
+    canvas.style.height = 'auto';
+    canvas.style.touchAction = 'none';
+    canvas.style.cursor = 'grab';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    var rows = data.rows, cols = data.cols;
+    var cx0 = (cols - 1) / 2, cz0 = (rows - 1) / 2;
+    var heightScale = Math.min(cols, rows) * 0.55;
+    var baseScale = Math.min(W / (cols + 5), H / (rows + 5)) * 0.92;
+
+    var az = -0.65, el = 0.95, zoom = 1;
+    var dragging = false, lastX = 0, lastY = 0, lastInteract = 0;
+    var AUTO_SPEED = 0.0038; // rad/frame — a full turn takes ~28s
+    var raf = 0, stopped = false;
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    function proj(x, y, z) {
+      var p = veRotate(x - cx0, y, z - cz0, az, el);
+      var s = baseScale * zoom;
+      return { sx: W / 2 + p.x1 * s, sy: H / 2 + 14 - p.y2 * s, depth: p.z2 };
+    }
+
+    function frame() {
+      if (stopped) return;
+      var now = Date.now();
+      if (!dragging && now - lastInteract > 2500) az += AUTO_SPEED;
+      ctx.clearRect(0, 0, W, H);
+      var m = veSurfaceModel(data, getDataset());
+      var byCell = {};
+      m.cells.forEach(function (cell) { byCell[cell.r + ',' + cell.c] = cell; });
+
+      var faces = [];
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          var cell = byCell[r + ',' + c];
+          var y = cell.h * heightScale;
+          var corners = [
+            proj(c, y, r), proj(c + 1, y, r),
+            proj(c + 1, y, r + 1), proj(c, y, r + 1)
+          ];
+          var depth = (corners[0].depth + corners[1].depth + corners[2].depth + corners[3].depth) / 4;
+          faces.push({ corners: corners, depth: depth, color: cell.color });
+        }
+      }
+      // Zero plane for the change view: translucent reference, drawn first.
+      var dataset = getDataset();
+      if (dataset === 'change') {
+        var zc = [proj(0, 0, 0), proj(cols - 1, 0, 0), proj(cols - 1, 0, rows - 1), proj(0, 0, rows - 1)];
+        ctx.beginPath();
+        zc.forEach(function (p, i) { if (i) ctx.lineTo(p.sx, p.sy); else ctx.moveTo(p.sx, p.sy); });
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(120,140,170,0.10)';
+        ctx.fill();
+      }
+      faces.sort(function (a, b) { return a.depth - b.depth; }); // far first
+      faces.forEach(function (f) {
+        ctx.beginPath();
+        f.corners.forEach(function (p, i) { if (i) ctx.lineTo(p.sx, p.sy); else ctx.moveTo(p.sx, p.sy); });
+        ctx.closePath();
+        ctx.fillStyle = f.color;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      });
+
+      // Axis labels: RPM along z, MAP along x, ticks at min/mid/max.
+      ctx.fillStyle = '#9fa9b8';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      function axisLabel(x, z, text) {
+        var p = proj(x, 0, z);
+        ctx.fillText(text, p.sx, p.sy + 14);
+      }
+      var midC = (cols - 1) / 2, midR = (rows - 1) / 2;
+      var rpmBp = data.rpmBp, mapBp = data.mapBp;
+      if (mapBp.length >= 3) {
+        axisLabel(0, rows - 1, String(mapBp[0]));
+        axisLabel(midC, rows - 1, String(mapBp[Math.floor(mapBp.length / 2)]));
+        axisLabel(cols - 1, rows - 1, String(mapBp[mapBp.length - 1]));
+      }
+      axisLabel(cols - 1 + 0.6, rows - 1, 'MAP kPa');
+      if (rpmBp.length >= 3) {
+        ctx.textAlign = 'right';
+        axisLabel(cols - 1, 0, String(rpmBp[0]));
+        axisLabel(cols - 1, midR, String(rpmBp[Math.floor(rpmBp.length / 2)]));
+        axisLabel(cols - 1, rows - 1, String(rpmBp[rpmBp.length - 1]));
+        ctx.textAlign = 'center';
+      }
+      axisLabel(cols - 1 + 0.6, 0, 'RPM');
+
+      raf = requestAnimationFrame(frame);
+    }
+
+    canvas.addEventListener('pointerdown', function (e) {
+      dragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      canvas.style.cursor = 'grabbing';
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      canvas.style.cursor = 'grab';
+      lastInteract = Date.now();
+    }
+    canvas.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      az += (e.clientX - lastX) * 0.008;
+      el = clamp(el + (e.clientY - lastY) * 0.006, 0.2, 1.45);
+      lastX = e.clientX; lastY = e.clientY;
+      lastInteract = Date.now();
+    });
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      zoom = clamp(zoom * Math.pow(1.0015, -e.deltaY), 0.5, 2.5);
+      lastInteract = Date.now();
+    }, { passive: false });
+
+    raf = requestAnimationFrame(frame);
+    return function stop() {
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+    };
   }
 
   /* ---------- entry point ---------- */
@@ -663,6 +909,9 @@
   P66.renderJournal = renderJournal;
   P66.veComparisonData = veComparisonData;
   P66.renderVeComparison = renderVeComparison;
+  P66.veSurfaceModel = veSurfaceModel;
+  P66.renderVeSurface = renderVeSurface;
+  P66._veRotate = veRotate;
   P66.renderDashboard = renderDashboard;
   P66._trimColor = trimColor;
   P66._sortedBins = sortedBins;
