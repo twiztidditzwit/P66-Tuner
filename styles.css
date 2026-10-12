@@ -391,6 +391,31 @@ footer.container {
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 .tab-desc { margin-top: 0.2rem; }
+
+/* Full-page moving background: red '95 Camaro, dimmed so UI stays readable */
+.bg-video-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+}
+.bg-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.bg-video-overlay {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(10, 14, 20, 0.78) 0%, rgba(10, 14, 20, 0.62) 100%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bg-video { display: none; }
+  .bg-video-wrap {
+    background: url('assets/camaro-bg-poster.webp') center / cover no-repeat;
+  }
+}
 .ve-grid-box {
   overflow-x: auto;
 }

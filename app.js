@@ -53,6 +53,22 @@
     comparison: document.getElementById('comparison')
   };
 
+  // Background video: if the asset file is missing (e.g. a clone without
+  // the binary), hide the wrapper so the page falls back to the dark theme.
+  (function bgVideoFallback() {
+    var v = document.querySelector('.bg-video');
+    if (!v) return;
+    v.addEventListener('error', function () {
+      var w = v.closest('.bg-video-wrap');
+      if (w) w.style.display = 'none';
+    }, true);
+    var src = v.querySelector('source');
+    if (src) src.addEventListener('error', function () {
+      var w = v.closest('.bg-video-wrap');
+      if (w) w.style.display = 'none';
+    });
+  })();
+
   // Dashboard category tabs: one visible panel at a time.
   (function wireDashTabs() {
     var tabBtns = document.querySelectorAll('.tabs[role="tablist"] button');

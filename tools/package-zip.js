@@ -138,6 +138,8 @@ function walkJs(dir, base) {
 function collectFiles() {
   var files = ['index.html', 'app.js', 'styles.css'];
   walkJs(path.join(ROOT, 'js'), 'js').forEach(function (f) { files.push(f); });
+  // Bundled media assets (video background + poster).
+  ['assets/camaro-bg.mp4', 'assets/camaro-bg-poster.webp'].forEach(function (f) { files.push(f); });
   // Sanity: never let an excluded path slip in.
   files.forEach(function (f) {
     if (EXCLUDE_RE.test(f) || SCRATCH_RE.test(f)) {
