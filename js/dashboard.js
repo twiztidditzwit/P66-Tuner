@@ -457,6 +457,190 @@
     paint();
   }
 
+  /* ---------- VE table before/after ---------- */
+
+  /**
+   * Pure data builder for the VE before/after view. Testable in node.
+   * Returns { before, after, deltas, rows, cols, rpmBp, mapBp, changed,
+   *   biggest, tableTitle } or { error }.
+   */
+  function veComparisonData(catalog, binBytes, patches) {
+    if (typeof P66.readTable !== 'function') {
+      return { error: 'Table reader not loaded (js/xdf-map.js).' };
+    }
+    var ve = P66.readTable(catalog, 'Main VE', binBytes);
+    if (!ve) {
+      return { error: 'Main VE table not readable from this binary/catalog.' };
+    }
+    var rows = ve.rows, cols = ve.cols, eb = ve.elementBytes, base = ve.base;
+    var after = ve.values.map(function (row) { return row.slice(); });
+    var deltas = [];
+    for (var r = 0; r < rows; r++) deltas.push(new Array(cols).fill(null));
+    var changed = 0, biggest = null;
+    (patches || []).forEach(function (p) {
+      if (p.address === undefined || p.address === null) return;
+      var idx = Math.floor((p.address - base) / eb);
+      if (idx < 0 || idx >= rows * cols) return; // not a VE cell
+      if (p.deltaPct === undefined || p.deltaPct === null) return; // fuel only
+      var rr = Math.floor(idx / cols), cc = idx % cols;
+      after[rr][cc] = p.newValue;
+      deltas[rr][cc] = { deltaPct: p.deltaPct, smoothed: !!p.smoothed };
+      changed++;
+      if (!biggest || Math.abs(p.deltaPct) > Math.abs(biggest.deltaPct)) {
+        biggest = { row: rr, col: cc, deltaPct: p.deltaPct };
+      }
+    });
+    function bps(axis) {
+      return ((axis && axis.labels) || []).map(function (l) { return parseFloat(l); })
+        .filter(function (v) { return isFinite(v); });
+    }
+    return {
+      before: ve.values, after: after, deltas: deltas,
+      rows: rows, cols: cols,
+      rpmBp: bps(ve.table.yAxis), mapBp: bps(ve.table.xAxis),
+      changed: changed, biggest: biggest,
+      tableTitle: ve.table.title || 'Main VE'
+    };
+  }
+
+  // Sequential blue scale for absolute VE values.
+  function veValueColor(v, min, max) {
+    var t = max > min ? (v - min) / (max - min) : 0.5;
+    t = Math.max(0, Math.min(1, t));
+    var lo = [26, 34, 48], hi = [64, 156, 255];
+    var rgb = lo.map(function (c, i) { return Math.round(c + (hi[i] - c) * t); });
+    return 'rgb(' + rgb.join(',') + ')';
+  }
+
+  function renderVeComparison(container, catalog, binBytes, patches) {
+    clear(container);
+    var data = veComparisonData(catalog, binBytes, patches);
+    if (data.error) {
+      emptyMsg(container, data.error);
+      return;
+    }
+    var vmin = Infinity, vmax = -Infinity, maxAbsDelta = 0;
+    data.before.forEach(function (row) {
+      row.forEach(function (v) {
+        if (v < vmin) vmin = v;
+        if (v > vmax) vmax = v;
+      });
+    });
+    data.deltas.forEach(function (row) {
+      row.forEach(function (d) {
+        if (d && Math.abs(d.deltaPct) > maxAbsDelta) maxAbsDelta = Math.abs(d.deltaPct);
+      });
+    });
+
+    var wrap = document.createElement('div');
+    var summary = document.createElement('p');
+    if (data.changed) {
+      var b = data.biggest;
+      var bRpm = data.rpmBp[b.row] !== undefined ? data.rpmBp[b.row] + ' RPM' : 'row ' + b.row;
+      var bMap = data.mapBp[b.col] !== undefined ? data.mapBp[b.col] + ' kPa' : 'col ' + b.col;
+      summary.innerHTML = '<strong>' + data.changed + ' of ' + (data.rows * data.cols) +
+        ' cells changed.</strong> Biggest move ' + (b.deltaPct > 0 ? '+' : '') + b.deltaPct +
+        '% @ ' + bRpm + ' / ' + bMap + '. <span class="muted">Raw table values; ' +
+        'smoothed buffer cells shown in italic.</span>';
+    } else {
+      summary.innerHTML = '<span class="muted">No VE changes in this tune — showing the stock table.</span>';
+    }
+    wrap.appendChild(summary);
+
+    var toggle = document.createElement('p');
+    toggle.className = 've-toggle';
+    ['before', 'after', 'change'].forEach(function (view, i) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = view === 'change' ? 'Change' : (view === 'before' ? 'Before' : 'After');
+      btn.setAttribute('data-view', view);
+      if (view === 'change') btn.classList.add('active');
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(toggle.querySelectorAll('button'), function (x) {
+          x.classList.remove('active');
+        });
+        btn.classList.add('active');
+        paint(view);
+      });
+      toggle.appendChild(btn);
+    });
+    wrap.appendChild(toggle);
+
+    var gridBox = document.createElement('div');
+    gridBox.className = 've-grid-box';
+    wrap.appendChild(gridBox);
+    container.appendChild(wrap);
+
+    function cellTip(r, c) {
+      var rpm = data.rpmBp[r] !== undefined ? data.rpmBp[r] + ' RPM' : 'row ' + r;
+      var map = data.mapBp[c] !== undefined ? data.mapBp[c] + ' kPa' : 'col ' + c;
+      var d = data.deltas[r][c];
+      var tip = rpm + ' / ' + map + ' — before ' + data.before[r][c] + ' → after ' + data.after[r][c];
+      if (d) {
+        tip += ' (' + (d.deltaPct > 0 ? '+' : '') + d.deltaPct + '%' +
+          (d.smoothed ? ', smoothed buffer' : '') + ')';
+      }
+      return tip;
+    }
+
+    function paint(view) {
+      gridBox.innerHTML = '';
+      var table = document.createElement('table');
+      table.className = 've-grid';
+      var thead = document.createElement('thead');
+      var hr = document.createElement('tr');
+      hr.appendChild(document.createElement('th')); // corner
+      data.mapBp.forEach(function (m) {
+        var th = document.createElement('th');
+        th.textContent = m;
+        hr.appendChild(th);
+      });
+      // If axis labels are missing, fall back to column indices.
+      if (!data.mapBp.length) {
+        for (var c0 = 0; c0 < data.cols; c0++) {
+          var th0 = document.createElement('th');
+          th0.textContent = c0;
+          hr.appendChild(th0);
+        }
+      }
+      thead.appendChild(hr);
+      table.appendChild(thead);
+      var tbody = document.createElement('tbody');
+      for (var r = 0; r < data.rows; r++) {
+        var tr = document.createElement('tr');
+        var rh = document.createElement('th');
+        rh.textContent = data.rpmBp[r] !== undefined ? data.rpmBp[r] : r;
+        tr.appendChild(rh);
+        for (var c = 0; c < data.cols; c++) {
+          var td = document.createElement('td');
+          var d = data.deltas[r][c];
+          td.title = cellTip(r, c);
+          if (view === 'change') {
+            if (d) {
+              td.textContent = (d.deltaPct > 0 ? '+' : '') + d.deltaPct + '%';
+              td.style.background = trimColor(Math.max(-10, Math.min(10, d.deltaPct)));
+              if (d.smoothed) td.style.fontStyle = 'italic';
+            } else {
+              td.textContent = '—';
+              td.className = 've-unchanged';
+            }
+          } else {
+            var v = view === 'before' ? data.before[r][c] : data.after[r][c];
+            td.textContent = v;
+            td.style.background = veValueColor(v, vmin, vmax);
+            if (view === 'after' && d) td.style.fontWeight = 'bold';
+          }
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      gridBox.appendChild(table);
+    }
+
+    paint('change');
+  }
+
   /* ---------- entry point ---------- */
 
   function renderDashboard(parts, report, parsedLog, mapResult, history, sessionMeta) {
@@ -477,6 +661,8 @@
   P66.renderComparison = renderComparison;
   P66.renderCoverage = renderCoverage;
   P66.renderJournal = renderJournal;
+  P66.veComparisonData = veComparisonData;
+  P66.renderVeComparison = renderVeComparison;
   P66.renderDashboard = renderDashboard;
   P66._trimColor = trimColor;
   P66._sortedBins = sortedBins;

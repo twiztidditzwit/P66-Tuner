@@ -547,6 +547,8 @@
               '<td>' + delta + '</td></tr>';
           });
           html += '</tbody></table>';
+          html += '<h3>VE Table: Before vs After</h3>';
+          html += '<div id="ve-compare"><p class="muted">Rendering VE table…</p></div>';
           html += '<p><strong>Audit trail</strong></p>';
           html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(provenance.sourceSha256) + '</code></p>';
           html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(provenance.patchedSha256) + '</code></p>';
@@ -587,6 +589,16 @@
     }
 
     tuneResults.innerHTML = html;
+
+    var veCompare = document.getElementById('ve-compare');
+    if (veCompare && typeof P66.renderVeComparison === 'function' && xdfCatalog && binBytes) {
+      try {
+        P66.renderVeComparison(veCompare, xdfCatalog, binBytes, lastPatches ? lastPatches.patches : []);
+      } catch (verr) {
+        veCompare.innerHTML = '<p class="muted">VE table render failed: ' +
+          esc(verr && verr.message ? verr.message : verr) + '</p>';
+      }
+    }
 
     var dlBtn = document.getElementById('download-bin-btn');
     if (dlBtn && lastPatches && lastPatches.patched) {

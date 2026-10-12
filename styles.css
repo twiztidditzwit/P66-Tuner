@@ -347,3 +347,49 @@ footer.container {
   display: block;
   padding-bottom: 2rem;
 }
+/* VE table before/after */
+.ve-toggle button {
+  width: auto;
+  margin: 0 0.35rem 0.5rem 0;
+  padding: 0.35rem 0.9rem;
+}
+.ve-toggle button.active {
+  border-color: var(--accent);
+  background: #24344d;
+}
+.ve-grid-box {
+  overflow-x: auto;
+}
+.ve-grid {
+  width: auto;
+  border-collapse: collapse;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.ve-grid th,
+.ve-grid td {
+  border: 1px solid #2a3340;
+  padding: 2px 5px;
+  text-align: center;
+  min-width: 38px;
+  white-space: nowrap;
+}
+.ve-grid thead th {
+  background: #1a2230;
+  color: var(--muted);
+  font-weight: normal;
+  position: sticky;
+  top: 0;
+}
+.ve-grid tbody th {
+  background: #1a2230;
+  color: var(--muted);
+  font-weight: normal;
+}
+.ve-grid td {
+  color: #e8edf3;
+}
+.ve-grid td.ve-unchanged {
+  color: #5a6575;
+  background: transparent;
+}

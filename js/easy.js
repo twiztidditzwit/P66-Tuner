@@ -279,6 +279,8 @@
         html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(prov.sourceSha256) + '</code></p>';
         html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(prov.patchedSha256) + '</code></p>';
         html += '<p><strong>Changed bytes:</strong> ' + prov.changedByteCount + '</p>';
+        html += '<h3>VE Table: Before vs After</h3>';
+        html += '<div id="easy-ve-compare"><p class="muted">Rendering VE table…</p></div>';
         html += '<p><button id="easy-download-btn" style="width:auto;padding:0.6rem 1.4rem;">Download tuned binary</button> ' +
           '<button id="easy-report-btn" style="width:auto;padding:0.6rem 1.4rem;">Download change report (.txt)</button></p>';
         html += '<p class="status-warn"><strong>Before you flash:</strong></p><ul>' +
@@ -306,6 +308,16 @@
 
     out.innerHTML = html;
     markStep(3, !!easyProvenance);
+
+    var easyVe = $('easy-ve-compare');
+    if (easyVe && typeof P66.renderVeComparison === 'function' && catalog && binBytes) {
+      try {
+        P66.renderVeComparison(easyVe, catalog, binBytes, allPatches);
+      } catch (verr) {
+        easyVe.innerHTML = '<p class="muted">VE table render failed: ' +
+          esc(verr && verr.message ? verr.message : verr) + '</p>';
+      }
+    }
 
     var dl = $('easy-download-btn');
     if (dl && finalImage) {
