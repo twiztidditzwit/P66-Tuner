@@ -41,15 +41,54 @@
   /* ---------- shared helpers (also unit-tested) ---------- */
 
   // Diverging color for trim %: blue (rich) -> neutral -> red (lean).
+  /**
+   * Multi-hue value ramp: deep indigo -> blue -> cyan -> green -> yellow ->
+   * orange -> red. Far more hue variation than a single-hue ramp while
+   * staying ordered dark/low -> bright/high. Explicit stops, no fit error.
+   */
+  var VALUE_STOPS = [
+    [35, 25, 70],    // deep indigo
+    [50, 90, 230],   // blue
+    [30, 190, 235],  // cyan
+    [45, 205, 130],  // green
+    [240, 225, 70],  // yellow
+    [245, 130, 35],  // orange
+    [215, 45, 35]    // red
+  ];
+  function valueRamp(t) {
+    t = Math.max(0, Math.min(1, t));
+    var segs = VALUE_STOPS.length - 1;
+    var x = t * segs;
+    var i = Math.min(Math.floor(x), segs - 1);
+    var f = x - i;
+    var a = VALUE_STOPS[i], b = VALUE_STOPS[i + 1];
+    var rgb = a.map(function (v, k) { return Math.round(v + (b[k] - v) * f); });
+    return 'rgb(' + rgb.join(',') + ')';
+  }
+
   function trimColor(t) {
     var c = Math.max(-10, Math.min(10, t)) / 10; // -1..1
-    var neutral = [38, 48, 62];
-    var target = c >= 0 ? [248, 81, 73] : [88, 166, 255];
     var k = Math.abs(c);
-    var rgb = neutral.map(function (n, i) {
-      return Math.round(n + (target[i] - n) * k);
-    });
+    var neutral = [38, 48, 62];
+    // Two-stop ramp per side for more hue travel:
+    // lean (+) : neutral -> orange -> red ; rich (-) : neutral -> cyan -> blue
+    var mid = c >= 0 ? [255, 171, 64] : [80, 200, 255];
+    var hi = c >= 0 ? [255, 77, 60] : [56, 120, 255];
+    var a, b, f;
+    if (k <= 0.5) { a = neutral; b = mid; f = k / 0.5; }
+    else { a = mid; b = hi; f = (k - 0.5) / 0.5; }
+    var rgb = a.map(function (v, i) { return Math.round(v + (b[i] - v) * f); });
     return 'rgb(' + rgb.join(',') + ')';
+  }
+
+  /**
+   * Readable text color over a data-cell background: dark text on bright
+   * cells, inherit (light) text on dark cells.
+   */
+  function cellTextColor(bg) {
+    var rgb = cssToRgb(bg);
+    var lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+    return lum > 140 ? '#141a23' : '';
   }
 
   function binLo(label) {
@@ -506,10 +545,7 @@
   // Sequential blue scale for absolute VE values.
   function veValueColor(v, min, max) {
     var t = max > min ? (v - min) / (max - min) : 0.5;
-    t = Math.max(0, Math.min(1, t));
-    var lo = [26, 34, 48], hi = [64, 156, 255];
-    var rgb = lo.map(function (c, i) { return Math.round(c + (hi[i] - c) * t); });
-    return 'rgb(' + rgb.join(',') + ')';
+    return valueRamp(Math.max(0, Math.min(1, t)));
   }
 
   function renderVeComparison(container, catalog, binBytes, patches) {
@@ -637,7 +673,9 @@
           if (view === 'change') {
             if (d) {
               td.textContent = (d.deltaPct > 0 ? '+' : '') + d.deltaPct + '%';
-              td.style.background = trimColor(Math.max(-10, Math.min(10, d.deltaPct)));
+              var chgBg = trimColor(Math.max(-10, Math.min(10, d.deltaPct)));
+              td.style.background = chgBg;
+              td.style.color = cellTextColor(chgBg);
               if (d.smoothed) td.style.fontStyle = 'italic';
             } else {
               td.textContent = '—';
@@ -646,7 +684,9 @@
           } else {
             var v = view === 'before' ? data.before[r][c] : data.after[r][c];
             td.textContent = v;
-            td.style.background = veValueColor(v, vmin, vmax);
+            var valBg = veValueColor(v, vmin, vmax);
+            td.style.background = valBg;
+            td.style.color = cellTextColor(valBg);
             if (view === 'after' && d) td.style.fontWeight = 'bold';
           }
           tr.appendChild(td);
@@ -1032,6 +1072,8 @@
   P66._veFaceLight = veFaceLight;
   P66.renderDashboard = renderDashboard;
   P66._trimColor = trimColor;
+  P66._valueRamp = valueRamp;
+  P66._cellTextColor = cellTextColor;
   P66._sortedBins = sortedBins;
   P66._downsample = downsample;
   P66._compareMetrics = compareMetrics;

@@ -131,27 +131,47 @@
 
       <section class="card grid-span-2">
         <h2>Dashboard</h2>
-        <div class="dashboard-grid">
+        <div class="tabs" role="tablist" aria-label="Result categories">
+          <button type="button" role="tab" data-tab="fuel" class="active" aria-selected="true">Fuel</button>
+          <button type="button" role="tab" data-tab="knock" aria-selected="false">Knock</button>
+          <button type="button" role="tab" data-tab="sensors" aria-selected="false">Sensors</button>
+          <button type="button" role="tab" data-tab="coverage" aria-selected="false">Coverage</button>
+          <button type="button" role="tab" data-tab="history" aria-selected="false">History</button>
+        </div>
+        <div class="tab-panel active" data-panel="fuel" role="tabpanel">
+          <p class="muted tab-desc">Where the engine runs rich or lean, cell by cell.</p>
           <div>
             <h3>Fuel Trim Heatmap <span class="muted" style="font-weight:normal">— RPM × MAP, avg combined trim</span></h3>
             <div id="heatmap"><p class="muted">Run analysis to render the heatmap.</p></div>
           </div>
+        </div>
+        <div class="tab-panel" data-panel="knock" role="tabpanel">
+          <p class="muted tab-desc">Knock retard events over time — real knock vs tip-out noise.</p>
           <div>
-            <h3>Log Coverage <span class="muted" style="font-weight:normal">— what to log next</span></h3>
-            <div id="coverage"><p class="muted">Run analysis to score log coverage.</p></div>
+            <h3>Knock Timeline</h3>
+            <div id="knock-chart"><p class="muted">Run analysis to render knock events.</p></div>
+          </div>
+        </div>
+        <div class="tab-panel" data-panel="sensors" role="tabpanel">
+          <p class="muted tab-desc">What the sensors saw — commanded vs measured mixture, and where the engine spent its time.</p>
+          <div>
+            <h3>Lambda Trace <span class="muted" style="font-weight:normal">— commanded vs measured</span></h3>
+            <div id="lambda-chart"><p class="muted">Run analysis to render the lambda trace.</p></div>
           </div>
           <div>
             <h3>Operating Regions</h3>
             <div id="region-chart"><p class="muted">Run analysis to render region breakdown.</p></div>
           </div>
+        </div>
+        <div class="tab-panel" data-panel="coverage" role="tabpanel">
+          <p class="muted tab-desc">How complete this log is — and what to log next for a better tune.</p>
           <div>
-            <h3>Knock Timeline</h3>
-            <div id="knock-chart"><p class="muted">Run analysis to render knock events.</p></div>
+            <h3>Log Coverage <span class="muted" style="font-weight:normal">— what to log next</span></h3>
+            <div id="coverage"><p class="muted">Run analysis to score log coverage.</p></div>
           </div>
-          <div>
-            <h3>Lambda Trace <span class="muted" style="font-weight:normal">— commanded vs measured</span></h3>
-            <div id="lambda-chart"><p class="muted">Run analysis to render the lambda trace.</p></div>
-          </div>
+        </div>
+        <div class="tab-panel" data-panel="history" role="tabpanel">
+          <p class="muted tab-desc">This session vs the last one, plus your own notes.</p>
           <div>
             <h3>Session Comparison <span class="muted" style="font-weight:normal">— previous vs current</span></h3>
             <div id="comparison"><p class="muted">Run analysis on two sessions to compare before/after.</p></div>

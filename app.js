@@ -53,6 +53,27 @@
     comparison: document.getElementById('comparison')
   };
 
+  // Dashboard category tabs: one visible panel at a time.
+  (function wireDashTabs() {
+    var tabBtns = document.querySelectorAll('.tabs[role="tablist"] button');
+    if (!tabBtns.length) return;
+    Array.prototype.forEach.call(tabBtns, function (btn) {
+      btn.addEventListener('click', function () {
+        var tablist = btn.closest('.tabs');
+        Array.prototype.forEach.call(tablist.querySelectorAll('button'), function (b) {
+          b.classList.remove('active');
+          b.setAttribute('aria-selected', 'false');
+        });
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+        var card = tablist.closest('.card');
+        Array.prototype.forEach.call(card.querySelectorAll('.tab-panel'), function (p) {
+          p.classList.toggle('active', p.getAttribute('data-panel') === btn.getAttribute('data-tab'));
+        });
+      });
+    });
+  })();
+
   var CANONICAL_LABELS = {
     RPM: 'RPM', MAP: 'MAP', MAF: 'MAF', TPS: 'TPS',
     STFT: 'STFT', STFT_B1: 'STFT Bank 1', STFT_B2: 'STFT Bank 2',
