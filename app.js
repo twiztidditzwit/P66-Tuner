@@ -97,6 +97,7 @@
     document.body.appendChild(canvas);
     var ctx = canvas.getContext('2d');
     var W = 0, H = 0;
+    var PIVOT = { x: 0, y: 0 }, BLADE_LEN = 0, SWATH = 34;
 
     // Offscreen trail layer (half res): wet trails persist and fade slowly.
     var SCALE = 0.5;
@@ -111,6 +112,8 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       trailC.width = Math.max(2, Math.round(W * SCALE));
       trailC.height = Math.max(2, Math.round(H * SCALE));
+      PIVOT.x = W / 2; PIVOT.y = H + 60;
+      BLADE_LEN = Math.hypot(W / 2, H) + 80;
     }
     resize();
     window.addEventListener('resize', resize);
@@ -127,7 +130,7 @@
           if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) continue;
           if (ox * ox + oy * oy > gr * gr) continue;
           var k = iy * GW + ix;
-          wet[k] = Math.min(1, wet[k] + amt);
+          wet[k] = Math.max(0, Math.min(1, wet[k] + amt));
         }
       }
     }
@@ -224,6 +227,74 @@
         wob: rand(0, 6.28), wobF: rand(1.2, 3),
         trail: []
       });
+    }
+
+    // ---- windshield wiper ----
+    // A blade pivots from below the viewport and sweeps an arc, squeegeeing
+    // a swath clear: droplets in the band vanish, the wetness grid is
+    // zeroed, and the persistent trail layer is erased along the blade.
+    var wiper = null, wipeDir = 1, lastWipeAt = -10000;
+
+    function nowMs() {
+      return (typeof performance !== 'undefined' && performance.now) ?
+        performance.now() : Date.now();
+    }
+    function startWipe() {
+      lastWipeAt = nowMs();
+      var from = wipeDir > 0 ? -1.15 : 1.15; // alternate sweep direction
+      wipeDir *= -1;
+      wiper = { t: 0, dur: 1.15, from: from, to: -from };
+    }
+    function maybeWipe() {
+      if (wiper) return;
+      if (nowMs() - lastWipeAt < 1200) return;
+      startWipe();
+    }
+    // Is point (x,y) inside the blade's cleared band at angle ang?
+    // ang measured from vertical, like the blade.
+    function inSwath(x, y, ang) {
+      var dx = x - PIVOT.x, dy = y - PIVOT.y;
+      var r = Math.sqrt(dx * dx + dy * dy);
+      if (r > BLADE_LEN || r < 2) return false;
+      var a = Math.atan2(dx, -dy);
+      return Math.abs(a - ang) < (SWATH / 2) / r;
+    }
+    function clearSwath(ang) {
+      var i, d;
+      for (i = statics.length - 1; i >= 0; i--) {
+        if (inSwath(statics[i].x, statics[i].y, ang)) statics.splice(i, 1);
+      }
+      for (i = mists.length - 1; i >= 0; i--) {
+        if (inSwath(mists[i].x, mists[i].y, ang)) mists.splice(i, 1);
+      }
+      for (i = ripples.length - 1; i >= 0; i--) {
+        d = ripples[i];
+        if (inSwath(d.x, d.y, ang)) ripples.splice(i, 1);
+      }
+      for (i = runners.length - 1; i >= 0; i--) {
+        d = runners[i];
+        if (inSwath(d.x, d.y, ang)) { runners.splice(i, 1); spawnRunner(); }
+      }
+      // zero the wetness grid along the blade
+      var steps = 24, sN, rr, bx, by;
+      for (sN = 0; sN <= steps; sN++) {
+        rr = (sN / steps) * BLADE_LEN;
+        bx = PIVOT.x + Math.sin(ang) * rr;
+        by = PIVOT.y - Math.cos(ang) * rr;
+        addWet(bx, by, SWATH * 0.75, -1);
+      }
+      // erase the persistent trail layer along the blade
+      tg.save();
+      tg.globalCompositeOperation = 'destination-out';
+      tg.strokeStyle = 'rgba(0,0,0,0.95)';
+      tg.lineWidth = SWATH * SCALE;
+      tg.lineCap = 'round';
+      tg.beginPath();
+      tg.moveTo(PIVOT.x * SCALE, PIVOT.y * SCALE);
+      tg.lineTo((PIVOT.x + Math.sin(ang) * BLADE_LEN) * SCALE,
+                (PIVOT.y - Math.cos(ang) * BLADE_LEN) * SCALE);
+      tg.stroke();
+      tg.restore();
     }
 
     function absorb(rx, ry, r) {
@@ -331,8 +402,39 @@
         ctx.globalAlpha = 1;
         if (r.y > H + 30 || r.x < -40 || r.x > W + 40) { runners.splice(i, 1); spawnRunner(); }
       }
+
+      // windshield wiper: sweep the blade, squeegee the swath clear
+      if (wiper) {
+        wiper.t += dt;
+        var wk = Math.min(wiper.t / wiper.dur, 1);
+        var e = wk < 0.5 ? 4 * wk * wk * wk : 1 - Math.pow(-2 * wk + 2, 3) / 2;
+        var ang = wiper.from + (wiper.to - wiper.from) * e;
+        clearSwath(ang);
+        var fadeA = Math.min(wk / 0.12, (1 - wk) / 0.12, 1);
+        var tipX = PIVOT.x + Math.sin(ang) * BLADE_LEN;
+        var tipY = PIVOT.y - Math.cos(ang) * BLADE_LEN;
+        ctx.globalAlpha = 0.95 * Math.max(0, fadeA);
+        ctx.strokeStyle = '#14181f';
+        ctx.lineWidth = 11;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(PIVOT.x, PIVOT.y); ctx.lineTo(tipX, tipY); ctx.stroke();
+        ctx.strokeStyle = 'rgba(150,165,185,0.85)';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(PIVOT.x, PIVOT.y);
+        ctx.lineTo(PIVOT.x + Math.sin(ang) * BLADE_LEN * 0.55,
+                   PIVOT.y - Math.cos(ang) * BLADE_LEN * 0.55);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        if (wk >= 1) wiper = null;
+      }
     }
     requestAnimationFrame(frame);
+
+    // A scroll wipes the windshield (throttled); plus one demo wipe after
+    // load so the effect is discoverable.
+    window.addEventListener('scroll', maybeWipe, { capture: true, passive: true });
+    setTimeout(function () { if (!wiper) startWipe(); }, 1400);
   })();
 
   // Background video: if the asset file is missing (e.g. a clone without
