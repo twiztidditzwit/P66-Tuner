@@ -53,6 +53,34 @@
     comparison: document.getElementById('comparison')
   };
 
+  // Seamless background loop: two stacked videos crossfade over the last
+  // 1.4s of each loop so the restart never visibly cuts.
+  (function smoothBgLoop() {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var videos = Array.prototype.slice.call(document.querySelectorAll('.bg-video'));
+    if (videos.length < 2) return;
+    var FADE = 1.4, active = 0, fading = false;
+    videos.forEach(function (v, i) {
+      v.addEventListener('timeupdate', function () {
+        if (i !== active || fading || !v.duration || v.duration === Infinity) return;
+        if (v.duration - v.currentTime <= FADE) {
+          fading = true;
+          var next = videos[1 - i];
+          active = 1 - i;
+          try { next.currentTime = 0; } catch (e) {}
+          var p = next.play();
+          if (p && typeof p.catch === 'function') p.catch(function () {});
+          next.classList.add('is-active');
+          v.classList.remove('is-active');
+          setTimeout(function () {
+            try { v.pause(); v.currentTime = 0; } catch (e) {}
+            fading = false;
+          }, FADE * 1000 + 250);
+        }
+      });
+    });
+  })();
+
   // Background video: if the asset file is missing (e.g. a clone without
   // the binary), hide the wrapper so the page falls back to the dark theme.
   (function bgVideoFallback() {
