@@ -192,6 +192,18 @@ td {
   color: var(--bad);
 }
 
+/* Fuel trim direction: positive trim (ECU adding fuel = lean) in blue,
+   negative trim (ECU removing fuel = rich) in red. */
+.trim-pos {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.trim-neg {
+  color: var(--bad);
+  font-weight: 600;
+}
+
 pre {
   margin: 0;
   white-space: pre-wrap;

@@ -741,8 +741,11 @@
           'Fix the cause before changing fueling.</p>';
         html += '<table><thead><tr><th>Cell</th><th>Bank 1 trim</th><th>Bank 2 trim</th><th>|Δ|</th><th>Samples</th></tr></thead><tbody>';
         bi.findings.slice(0, 8).forEach(function (f) {
-          html += '<tr><td>' + esc(f.cell) + '</td><td>' + (f.bank1Avg > 0 ? '+' : '') + f.bank1Avg + '%</td>' +
-            '<td>' + (f.bank2Avg > 0 ? '+' : '') + f.bank2Avg + '%</td>' +
+          var b1cls = f.bank1Avg > 0 ? 'trim-pos' : (f.bank1Avg < 0 ? 'trim-neg' : '');
+          var b2cls = f.bank2Avg > 0 ? 'trim-pos' : (f.bank2Avg < 0 ? 'trim-neg' : '');
+          html += '<tr><td>' + esc(f.cell) + '</td>' +
+            '<td class="' + b1cls + '">' + (f.bank1Avg > 0 ? '+' : '') + f.bank1Avg + '%</td>' +
+            '<td class="' + b2cls + '">' + (f.bank2Avg > 0 ? '+' : '') + f.bank2Avg + '%</td>' +
             '<td class="status-bad">' + Math.abs(f.delta) + '%</td>' +
             '<td>' + f.samples1 + '/' + f.samples2 + '</td></tr>';
         });
