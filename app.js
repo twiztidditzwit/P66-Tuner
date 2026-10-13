@@ -780,6 +780,49 @@
       html += '<p class="muted">' + esc(nb.reason || 'No O2 data.') + '</p>';
     }
 
+    // Throttle response (tip-in)
+    var ti = report.tipIn;
+    html += '<h3>Throttle Response</h3>';
+    if (ti && ti.available) {
+      if (!ti.events) {
+        html += '<p class="muted">No sharp throttle stabs found in this log — log some aggressive tip-ins to test accel enrichment.</p>';
+      } else {
+        var tcls = ti.leanFraction >= 0.5 ? 'status-bad' : (ti.leanFraction >= 0.25 ? 'status-warn' : 'status-ok');
+        html += '<p class="' + tcls + '">' + ti.events + ' throttle stab(s) found; ' +
+          ti.leanEvents + ' showed a lean spike (O2 below ' + ti.leanThresholdMv + ' mV within ~1 s).' +
+          (ti.avgMinO2 !== null ? ' Average dip to ' + ti.avgMinO2 + ' mV.' : '') + '</p>';
+        if (ti.eventsDetail && ti.eventsDetail.length) {
+          html += '<table><thead><tr><th>#</th><th>TPS jump</th><th>RPM</th><th>Min O2 mV</th><th>Lean spike</th></tr></thead><tbody>';
+          ti.eventsDetail.slice(0, 8).forEach(function (e, i) {
+            html += '<tr><td>' + (i + 1) + '</td><td>+' + e.dtps + '%</td><td>' +
+              (e.rpm !== null ? Math.round(e.rpm) : '—') + '</td><td>' +
+              (e.minO2 !== null ? e.minO2 : '—') + '</td>' +
+              '<td class="' + (e.leanSpike ? 'status-bad' : 'status-ok') + '">' +
+              (e.leanSpike ? 'yes' : 'no') + '</td></tr>';
+          });
+          html += '</tbody></table>';
+        }
+      }
+    } else {
+      html += '<p class="muted">' + esc((ti && ti.reason) || 'Tip-in analysis unavailable.') + '</p>';
+    }
+
+    // PE entry
+    var pee = report.peEntry;
+    html += '<h3>Power Enrichment Entry</h3>';
+    if (pee && pee.available) {
+      if (!pee.episodes) {
+        html += '<p class="muted">No sustained high-throttle episodes in this log — log some full-throttle pulls to test PE entry.</p>';
+      } else {
+        var pcls = pee.engageFraction >= 0.5 ? 'status-ok' : 'status-bad';
+        html += '<p class="' + pcls + '">' + pee.episodes + ' high-throttle episode(s); PE engaged in ' +
+          pee.peEngaged + '.' +
+          (pee.avgDelaySec !== null ? ' Average engagement delay ' + pee.avgDelaySec + ' s.' : '') + '</p>';
+      }
+    } else {
+      html += '<p class="muted">' + esc((pee && pee.reason) || 'PE entry analysis unavailable.') + '</p>';
+    }
+
     analysisResults.innerHTML = html;
   }
 
@@ -868,13 +911,25 @@
         var peResult = (typeof P66.applyPeSuggestions === 'function')
           ? P66.applyPeSuggestions(xdfCatalog, peBase, result.actionable)
           : { patches: [], patched: null, error: 'PE patcher not loaded (js/xdf-map.js).' };
-        var allPatches = (patchResult.patches || []).concat(sparkResult.patches || [], peResult.patches || []);
-        var finalImage = peResult.patched || sparkResult.patched || patchResult.patched;
-        var patchErrors = [patchResult.error, sparkResult.error, peResult.error].filter(function (e) { return !!e; });
+        var aeBase = (peResult.patched && !peResult.error) ? peResult.patched : peBase;
+        var aeResult = (typeof P66.applyAeSuggestions === 'function')
+          ? P66.applyAeSuggestions(xdfCatalog, aeBase, result.actionable)
+          : { patches: [], patched: null, error: 'AE patcher not loaded (js/xdf-map.js).', warnings: [] };
+        var peEntryBase = (aeResult.patched && !aeResult.error) ? aeResult.patched : aeBase;
+        var peEntryResult = (typeof P66.applyPeEntrySuggestions === 'function')
+          ? P66.applyPeEntrySuggestions(xdfCatalog, peEntryBase, result.actionable)
+          : { patches: [], patched: null, error: 'PE entry patcher not loaded (js/xdf-map.js).', warnings: [] };
+        var allPatches = (patchResult.patches || []).concat(sparkResult.patches || [], peResult.patches || [], aeResult.patches || [], peEntryResult.patches || []);
+        var finalImage = peEntryResult.patched || aeResult.patched || peResult.patched || sparkResult.patched || patchResult.patched;
+        var patchErrors = [patchResult.error, sparkResult.error, peResult.error, aeResult.error, peEntryResult.error].filter(function (e) { return !!e; });
+        var patchWarnings = (patchResult.warnings || []).concat(sparkResult.warnings || [], peResult.warnings || [], aeResult.warnings || [], peEntryResult.warnings || []);
         if (allPatches.length === 0 && patchErrors.length) {
           html += '<p class="status-warn">Binary patching unavailable: ' + esc(patchErrors.join(' / ')) + '</p>';
         } else if (patchErrors.length) {
           html += '<p class="status-warn">Partial patching: ' + esc(patchErrors.join(' / ')) + '</p>';
+        }
+        if (patchWarnings.length) {
+          html += '<p class="status-warn">' + esc(patchWarnings.join(' ')) + '</p>';
         }
         if (allPatches.length) {
           // Reliability gate: verify every patch against the source binary

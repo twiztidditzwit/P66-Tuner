@@ -86,6 +86,20 @@
         'reads solidly rich up top — if it still looks lean, do not keep pushing it.');
     });
 
+    var ae = (suggestions || []).filter(function (s) { return s.kind === 'ae' && s.action !== 'none'; });
+    ae.forEach(function (s) {
+      bullets.push('Throttle response: your log shows the engine going lean every time you stab the throttle ' +
+        '(tip-in stumble). This tune increases accel-enrichment fueling by about ' + Math.abs(s.deltaPct) +
+        '% so the throttle hits harder with less hesitation.');
+    });
+
+    var peEntry = (suggestions || []).filter(function (s) { return s.kind === 'pe-entry' && s.action !== 'none'; });
+    peEntry.forEach(function (s) {
+      bullets.push('Full-throttle response: power enrichment was late or missing when you went to high throttle. ' +
+        'This tune brings PE in earlier (TPS threshold down about ' + Math.abs(s.deltaPct) +
+        '%) so the engine fuels up sooner when you floor it.');
+    });
+
     var n = (patches || []).length;
     var headline;
     if (!bullets.length) {

@@ -186,8 +186,16 @@
     var pe = (typeof P66.applyPeSuggestions === 'function')
       ? P66.applyPeSuggestions(catalog, peBase, sug.actionable)
       : { patches: [], patched: null, error: null };
-    var allPatches = (fuel.patches || []).concat(spark.patches || [], pe.patches || []);
-    var finalImage = pe.patched || spark.patched || fuel.patched;
+    var aeBase = (pe.patched && !pe.error) ? pe.patched : peBase;
+    var ae = (typeof P66.applyAeSuggestions === 'function')
+      ? P66.applyAeSuggestions(catalog, aeBase, sug.actionable)
+      : { patches: [], patched: null, error: null, warnings: [] };
+    var peEntryBase = (ae.patched && !ae.error) ? ae.patched : aeBase;
+    var peEntry = (typeof P66.applyPeEntrySuggestions === 'function')
+      ? P66.applyPeEntrySuggestions(catalog, peEntryBase, sug.actionable)
+      : { patches: [], patched: null, error: null, warnings: [] };
+    var allPatches = (fuel.patches || []).concat(spark.patches || [], pe.patches || [], ae.patches || [], peEntry.patches || []);
+    var finalImage = peEntry.patched || ae.patched || pe.patched || spark.patched || fuel.patched;
 
     var verification = (typeof P66.verifyPatches === 'function')
       ? P66.verifyPatches(catalog, binBytes, { patches: allPatches, patched: finalImage, error: null })
