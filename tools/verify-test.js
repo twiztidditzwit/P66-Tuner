@@ -34,8 +34,8 @@ function hasCheck(result, kind, checkName) {
 // Synthetic fuel suggestions hitting real Main VE cells.
 function suggestions() {
   return [
-    { kind: 'fuel', table: 'VE/MAF', cell: '2000-2800 RPM / 80-100 kPa', action: 'add fuel', deltaPct: 6, confidence: 'high', samples: 120 },
-    { kind: 'fuel', table: 'VE/MAF', cell: '800-1200 RPM / 30-40 kPa', action: 'remove fuel', deltaPct: -5, confidence: 'high', samples: 200 }
+    { kind: 'fuel', table: 'Main VE', cell: '2000-2800 RPM / 80-100 kPa', action: 'add fuel', deltaPct: 6, confidence: 'high', samples: 120 },
+    { kind: 'fuel', table: 'Main VE', cell: '800-1200 RPM / 30-40 kPa', action: 'remove fuel', deltaPct: -5, confidence: 'high', samples: 200 }
   ];
 }
 

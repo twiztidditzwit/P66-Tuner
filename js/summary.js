@@ -59,9 +59,14 @@
       var where = list.length === 1
         ? cellWords(biggest.cell)
         : cellWords(biggest.cell) + ' (and ' + (list.length - 1) + ' similar spot' + (list.length > 2 ? 's' : '') + ')';
+      var tables = [];
+      list.forEach(function (s) {
+        var t = s.table || 'Main VE';
+        if (tables.indexOf(t) === -1) tables.push(t);
+      });
       bullets.push('Fuel: your log shows the engine running ' + why + ' ' + where +
         ' — the computer was compensating. This tune ' + verb + ' about ' +
-        Math.abs(biggest.deltaPct) + '% fuel there.');
+        Math.abs(biggest.deltaPct) + '% fuel there (' + tables.join(' + ') + ').');
     }
     fuelLine(addFuel, 'adds', 'lean');
     fuelLine(cutFuel, 'removes', 'rich');

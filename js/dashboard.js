@@ -504,13 +504,14 @@
    * Returns { before, after, deltas, rows, cols, rpmBp, mapBp, changed,
    *   biggest, tableTitle } or { error }.
    */
-  function veComparisonData(catalog, binBytes, patches) {
+  function veComparisonData(catalog, binBytes, patches, tableName) {
+    tableName = tableName || 'Main VE';
     if (typeof P66.readTable !== 'function') {
       return { error: 'Table reader not loaded (js/xdf-map.js).' };
     }
-    var ve = P66.readTable(catalog, 'Main VE', binBytes);
+    var ve = P66.readTable(catalog, tableName, binBytes);
     if (!ve) {
-      return { error: 'Main VE table not readable from this binary/catalog.' };
+      return { error: tableName + ' table not readable from this binary/catalog.' };
     }
     var rows = ve.rows, cols = ve.cols, eb = ve.elementBytes, base = ve.base;
     var after = ve.values.map(function (row) { return row.slice(); });
@@ -519,8 +520,9 @@
     var changed = 0, biggest = null;
     (patches || []).forEach(function (p) {
       if (p.address === undefined || p.address === null) return;
+      if (p.table && p.table !== tableName) return; // belongs to the other VE table
       var idx = Math.floor((p.address - base) / eb);
-      if (idx < 0 || idx >= rows * cols) return; // not a VE cell
+      if (idx < 0 || idx >= rows * cols) return; // not a cell of this table
       if (p.deltaPct === undefined || p.deltaPct === null) return; // fuel only
       var rr = Math.floor(idx / cols), cc = idx % cols;
       after[rr][cc] = p.newValue;
@@ -556,38 +558,51 @@
       container._veStop = null;
     }
     clear(container);
-    var data = veComparisonData(catalog, binBytes, patches);
-    if (data.error) {
-      emptyMsg(container, data.error);
-      return;
-    }
-    var vmin = Infinity, vmax = -Infinity, maxAbsDelta = 0;
-    data.before.forEach(function (row) {
-      row.forEach(function (v) {
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
-      });
+
+    // VE tables touched by this tune's patches (Main VE first), limited to
+    // tables the catalog can actually read. A table switcher appears only
+    // when the tune touched more than one table.
+    var tableNames = [];
+    (patches || []).forEach(function (p) {
+      if (p && p.table && tableNames.indexOf(p.table) === -1) tableNames.push(p.table);
     });
-    data.deltas.forEach(function (row) {
-      row.forEach(function (d) {
-        if (d && Math.abs(d.deltaPct) > maxAbsDelta) maxAbsDelta = Math.abs(d.deltaPct);
-      });
+    tableNames.sort(function (a, b) {
+      if (a === 'Main VE') return -1;
+      if (b === 'Main VE') return 1;
+      return a < b ? -1 : 1;
     });
+    tableNames = tableNames.filter(function (t) {
+      return typeof P66.readTable === 'function' && P66.readTable(catalog, t, binBytes) !== null;
+    });
+    if (!tableNames.length) tableNames = ['Main VE'];
+
+    var currentTable = tableNames[0];
+    var currentView = 'change';
+    var data = null, vmin = 0, vmax = 1;
 
     var wrap = document.createElement('div');
     var summary = document.createElement('p');
-    if (data.changed) {
-      var b = data.biggest;
-      var bRpm = data.rpmBp[b.row] !== undefined ? data.rpmBp[b.row] + ' RPM' : 'row ' + b.row;
-      var bMap = data.mapBp[b.col] !== undefined ? data.mapBp[b.col] + ' kPa' : 'col ' + b.col;
-      summary.innerHTML = '<strong>' + data.changed + ' of ' + (data.rows * data.cols) +
-        ' cells changed.</strong> Biggest move ' + (b.deltaPct > 0 ? '+' : '') + b.deltaPct +
-        '% @ ' + bRpm + ' / ' + bMap + '. <span class="muted">Raw table values; ' +
-        'smoothed buffer cells shown in italic.</span>';
-    } else {
-      summary.innerHTML = '<span class="muted">No VE changes in this tune — showing the stock table.</span>';
-    }
     wrap.appendChild(summary);
+
+    if (tableNames.length > 1) {
+      var tableToggle = document.createElement('p');
+      tableToggle.className = 've-toggle';
+      tableNames.forEach(function (t) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = t;
+        if (t === currentTable) btn.classList.add('active');
+        btn.addEventListener('click', function () {
+          Array.prototype.forEach.call(tableToggle.querySelectorAll('button'), function (x) {
+            x.classList.remove('active');
+          });
+          btn.classList.add('active');
+          loadTable(t);
+        });
+        tableToggle.appendChild(btn);
+      });
+      wrap.appendChild(tableToggle);
+    }
 
     var toggle = document.createElement('p');
     toggle.className = 've-toggle';
@@ -602,13 +617,13 @@
       btn.type = 'button';
       btn.textContent = v.label;
       btn.setAttribute('data-view', v.key);
-      if (v.key === 'change') btn.classList.add('active');
+      if (v.key === currentView) btn.classList.add('active');
       btn.addEventListener('click', function () {
         Array.prototype.forEach.call(toggle.querySelectorAll('button'), function (x) {
           x.classList.remove('active');
         });
         btn.classList.add('active');
-        paint(v.key);
+        setView(v.key);
       });
       toggle.appendChild(btn);
     });
@@ -618,6 +633,45 @@
     gridBox.className = 've-grid-box';
     wrap.appendChild(gridBox);
     container.appendChild(wrap);
+
+    function updateSummary() {
+      if (data.changed) {
+        var b = data.biggest;
+        var bRpm = data.rpmBp[b.row] !== undefined ? data.rpmBp[b.row] + ' RPM' : 'row ' + b.row;
+        var bMap = data.mapBp[b.col] !== undefined ? data.mapBp[b.col] + ' kPa' : 'col ' + b.col;
+        summary.innerHTML = '<strong>' + data.tableTitle + ': ' + data.changed + ' of ' + (data.rows * data.cols) +
+          ' cells changed.</strong> Biggest move ' + (b.deltaPct > 0 ? '+' : '') + b.deltaPct +
+          '% @ ' + bRpm + ' / ' + bMap + '. <span class="muted">Raw table values; ' +
+          'smoothed buffer cells shown in italic.</span>';
+      } else {
+        summary.innerHTML = '<span class="muted">No ' + data.tableTitle +
+          ' changes in this tune — showing the stock table.</span>';
+      }
+    }
+
+    function loadTable(t) {
+      currentTable = t;
+      data = veComparisonData(catalog, binBytes, patches, t);
+      if (data.error) {
+        summary.innerHTML = '<span class="muted">' + data.error + '</span>';
+        gridBox.innerHTML = '';
+        return;
+      }
+      vmin = Infinity; vmax = -Infinity;
+      data.before.forEach(function (row) {
+        row.forEach(function (v) {
+          if (v < vmin) vmin = v;
+          if (v > vmax) vmax = v;
+        });
+      });
+      updateSummary();
+      paint();
+    }
+
+    function setView(v) {
+      currentView = v;
+      paint();
+    }
 
     function cellTip(r, c) {
       var rpm = data.rpmBp[r] !== undefined ? data.rpmBp[r] + ' RPM' : 'row ' + r;
@@ -631,7 +685,8 @@
       return tip;
     }
 
-    function paint(view) {
+    function paint() {
+      var view = currentView;
       if (container._veStop) {
         try { container._veStop(); } catch (e) { /* ignore */ }
         container._veStop = null;
@@ -730,7 +785,7 @@
       }
     }
 
-    paint('change');
+    loadTable(currentTable);
   }
 
   /* ---------- VE table 3D surface ---------- */

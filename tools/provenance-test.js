@@ -60,8 +60,8 @@ console.log('2. end-to-end: applyFuelSuggestions -> buildProvenance on the stock
 var catalog = JSON.parse(fs.readFileSync(path.join(ROOT, 'defs', 'xdf', 'p66-v6-34l.catalog.json'), 'utf8'));
 var stockBin = new Uint8Array(fs.readFileSync(path.join(ROOT, 'defs', 'bins', 'stock-1995-camaro-l32.bin')));
 var sug = [
-  { kind: 'fuel', table: 'VE/MAF', cell: '2000-2800 RPM / 80-100 kPa', action: 'add fuel', deltaPct: 6, confidence: 'high', samples: 120 },
-  { kind: 'fuel', table: 'VE/MAF', cell: '800-1200 RPM / 30-40 kPa', action: 'remove fuel', deltaPct: -5, confidence: 'high', samples: 200 }
+  { kind: 'fuel', table: 'Main VE', cell: '2000-2800 RPM / 80-100 kPa', action: 'add fuel', deltaPct: 6, confidence: 'high', samples: 120 },
+  { kind: 'fuel', table: 'Main VE', cell: '800-1200 RPM / 30-40 kPa', action: 'remove fuel', deltaPct: -5, confidence: 'high', samples: 200 }
 ];
 var pr = P66.applyFuelSuggestions(catalog, stockBin, sug);
 check('patches generated', pr.patches.length > 0, 'got ' + pr.patches.length);
