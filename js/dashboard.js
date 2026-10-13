@@ -40,7 +40,7 @@
 
   /* ---------- shared helpers (also unit-tested) ---------- */
 
-  // Diverging color for trim %: blue (rich) -> neutral -> red (lean).
+  // Diverging color for trim %: blue (lean = add fuel) -> neutral -> red (rich = remove fuel).
   /**
    * Multi-hue value ramp: deep indigo -> blue -> cyan -> green -> yellow ->
    * orange -> red. Far more hue variation than a single-hue ramp while
@@ -71,9 +71,10 @@
     var k = Math.abs(c);
     var neutral = [38, 48, 62];
     // Two-stop ramp per side for more hue travel:
-    // lean (+) : neutral -> orange -> red ; rich (-) : neutral -> cyan -> blue
-    var mid = c >= 0 ? [255, 171, 64] : [80, 200, 255];
-    var hi = c >= 0 ? [255, 77, 60] : [56, 120, 255];
+    // lean (+) = adding fuel -> neutral -> cyan -> blue ;
+    // rich (-) = removing fuel -> neutral -> orange -> red
+    var mid = c >= 0 ? [80, 200, 255] : [255, 171, 64];
+    var hi = c >= 0 ? [56, 120, 255] : [255, 77, 60];
     var a, b, f;
     if (k <= 0.5) { a = neutral; b = mid; f = k / 0.5; }
     else { a = mid; b = hi; f = (k - 0.5) / 0.5; }

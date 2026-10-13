@@ -51,11 +51,11 @@ console.log('color: trim diverging ramp');
 var n0 = rgb(P66._trimColor(0));
 check('trim(0) is the dark neutral', n0 && n0.join() === '38,48,62', P66._trimColor(0));
 var lp = rgb(P66._trimColor(10)), ln = rgb(P66._trimColor(-10));
-check('trim(+10) is red', lp && lp[0] > 200 && lp[2] < 100, P66._trimColor(10));
-check('trim(-10) is blue', ln && ln[2] > 200 && ln[0] < 100, P66._trimColor(-10));
+check('trim(+10) is blue (add fuel = lean)', lp && lp[2] > 200 && lp[0] < 100, P66._trimColor(10));
+check('trim(-10) is red (remove fuel = rich)', ln && ln[0] > 200 && ln[2] < 100, P66._trimColor(-10));
 var mp = rgb(P66._trimColor(5)), mn = rgb(P66._trimColor(-5));
-check('trim(+5) passes through orange', mp && mp[0] > 200 && mp[1] > 120 && mp[1] < 220 && mp[2] < 120, P66._trimColor(5));
-check('trim(-5) passes through cyan', mn && mn[1] > 150 && mn[2] > 200 && mn[0] < 140, P66._trimColor(-5));
+check('trim(+5) passes through cyan', mp && mp[1] > 150 && mp[2] > 200 && mp[0] < 140, P66._trimColor(5));
+check('trim(-5) passes through orange', mn && mn[0] > 200 && mn[1] > 120 && mn[1] < 220 && mn[2] < 120, P66._trimColor(-5));
 check('trim clamps beyond +-10', P66._trimColor(99) === P66._trimColor(10) && P66._trimColor(-99) === P66._trimColor(-10));
 
 console.log('color: cell text contrast');
