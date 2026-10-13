@@ -541,6 +541,167 @@
   }
 
   /**
+   * Tip-in (throttle stab) analysis for accel-enrichment adequacy.
+   *
+   * A tip-in event is a fast TPS increase (>= TIP_IN_DTPS % in one sample,
+   * ~0.15 s at ALDL rates). After each event we watch the narrowband O2 for
+   * WINDOW samples (~1.2 s): a healthy AE shot drives the O2 rich briefly,
+   * while an insufficient shot lets it dip lean (< LEAN_MV mV) — the classic
+   * tip-in stumble. Events closer than REFRACTORY samples are merged so one
+   * stab counts once.
+   *
+   * Cold-start rows are NOT excluded (unlike fuel trims): a tip-in is a
+   * transient by nature. Events are tagged cold/warm via the ECT warmup
+   * threshold so the tuner can require warm events.
+   *
+   * Returns { available, events, leanEvents, leanFraction, avgMinO2,
+   *   avgDtps, warmEvents, ... } or { available: false, reason }.
+   */
+  var TIP_IN_DTPS = 10;   // % TPS jump in one sample that counts as a stab
+  var TIP_IN_WINDOW = 8;  // samples after the stab to watch (~1.2 s)
+  var TIP_IN_LEAN_MV = 250; // O2 below this in the window = lean spike
+  var TIP_IN_REFRACTORY = 20; // min samples between counted events
+  var TIP_IN_MIN_EVENTS = 5;  // minimum events before the tuner acts
+
+  function analyzeTipIn(rows, mapResult) {
+    var tpsCol = P66.columnFor(mapResult, 'TPS');
+    var o2Col = P66.columnFor(mapResult, 'O2_B1') || P66.columnFor(mapResult, 'O2');
+    var rpmCol = P66.columnFor(mapResult, 'RPM');
+    var ectCol = P66.columnFor(mapResult, 'ECT');
+    if (!tpsCol || !o2Col) {
+      return { available: false, reason: 'Need TPS and narrowband O2 channels.' };
+    }
+    var warmThr = ectCol ? ectWarmThreshold(rows, ectCol) : null;
+
+    var events = [];
+    var prevTps = null, lastEventIdx = -TIP_IN_REFRACTORY;
+    rows.forEach(function (row, i) {
+      var tps = num(row[tpsCol]);
+      if (tps === null) { prevTps = null; return; }
+      if (prevTps !== null && i - lastEventIdx >= TIP_IN_REFRACTORY) {
+        var dtps = tps - prevTps;
+        if (dtps >= TIP_IN_DTPS) {
+          // Confirm a real stab, not a one-sample data glitch: the throttle
+          // must stay open (>= +5%) for most of the next 5 samples.
+          var sustained = 0;
+          for (var k = i + 1; k < Math.min(i + 6, rows.length); k++) {
+            var tk = num(rows[k][tpsCol]);
+            if (tk !== null && tk >= prevTps + 5) sustained++;
+          }
+          if (sustained < 3) { prevTps = tps; return; }
+          var minO2 = Infinity, o2n = 0;
+          for (var j = i; j < Math.min(i + TIP_IN_WINDOW, rows.length); j++) {
+            var o2 = num(rows[j][o2Col]);
+            if (o2 === null) continue;
+            o2n++;
+            if (o2 < minO2) minO2 = o2;
+          }
+          var ect = ectCol ? num(row[ectCol]) : null;
+          events.push({
+            index: i,
+            dtps: round2(dtps),
+            tpsFrom: round2(prevTps),
+            tpsTo: round2(tps),
+            rpm: rpmCol ? num(row[rpmCol]) : null,
+            minO2: o2n ? Math.round(minO2) : null,
+            leanSpike: o2n > 0 && minO2 < TIP_IN_LEAN_MV,
+            cold: ect !== null && warmThr !== null && ect < warmThr.threshold
+          });
+          lastEventIdx = i;
+        }
+      }
+      prevTps = tps;
+    });
+
+    var lean = events.filter(function (e) { return e.leanSpike; });
+    var warm = events.filter(function (e) { return !e.cold; });
+    function avg(list, key) {
+      var s = 0, n = 0;
+      list.forEach(function (e) { if (e[key] !== null) { s += e[key]; n++; } });
+      return n ? Math.round(s / n) : null;
+    }
+    return {
+      available: true,
+      events: events.length,
+      warmEvents: warm.length,
+      leanEvents: lean.length,
+      leanFraction: events.length ? round2(lean.length / events.length) : 0,
+      warmLeanFraction: warm.length ? round2(lean.filter(function (e) { return !e.cold; }).length / warm.length) : 0,
+      avgMinO2: avg(lean, 'minO2'),
+      avgDtps: avg(events, 'dtps'),
+      minEvents: TIP_IN_MIN_EVENTS,
+      tipInDtps: TIP_IN_DTPS,
+      windowSamples: TIP_IN_WINDOW,
+      leanThresholdMv: TIP_IN_LEAN_MV,
+      sampleSec: 0.145, // nominal ALDL sample interval; window ≈ 1.2 s
+      eventsDetail: events.slice(0, 25)
+    };
+  }
+
+  /**
+   * Power-enrichment entry analysis.
+   *
+   * PE (wide-open-throttle fueling) should engage promptly when the driver
+   * goes to high throttle. This finds high-throttle episodes (TPS >= 60%
+   * sustained ~1 s) and checks whether commanded lambda drops into PE range
+   * (< 0.95) during each episode, and how long after the episode starts.
+   * Late or absent PE = lazy WOT response; the fix is an earlier PE entry
+   * (lower TPS% threshold).
+   *
+   * Needs TPS and commanded lambda; without commanded lambda PE engagement
+   * cannot be observed, so the check reports unavailable.
+   */
+  var PE_TPS_MIN = 60;      // % TPS that counts as high throttle
+  var PE_EPISODE_MIN = 7;   // samples of sustained high TPS (~1 s)
+  var PE_LAMBDA_MAX = 0.95; // commanded lambda below this = PE active
+  var PE_MIN_EPISODES = 3;  // minimum episodes before the tuner acts
+
+  function analyzePeEntry(rows, mapResult) {
+    var tpsCol = P66.columnFor(mapResult, 'TPS');
+    var cmdCol = P66.columnFor(mapResult, 'CMD_LAMBDA');
+    if (!tpsCol) return { available: false, reason: 'Need TPS channel.' };
+    if (!cmdCol) {
+      return { available: false, reason: 'Need commanded lambda/AFR channel.' };
+    }
+    var episodes = [];
+    var cur = null;
+    rows.forEach(function (row, i) {
+      var tps = num(row[tpsCol]);
+      if (tps !== null && tps >= PE_TPS_MIN) {
+        if (!cur) cur = { startIdx: i, samples: 0, peAt: null };
+        cur.samples++;
+        if (cur.peAt === null) {
+          var lambda = P66.toLambda ? P66.toLambda(num(row[cmdCol])) : num(row[cmdCol]);
+          if (lambda !== null && lambda < PE_LAMBDA_MAX) cur.peAt = i;
+        }
+      } else if (cur) {
+        if (cur.samples >= PE_EPISODE_MIN) episodes.push(cur);
+        cur = null;
+      }
+    });
+    if (cur && cur.samples >= PE_EPISODE_MIN) episodes.push(cur);
+
+    var engaged = episodes.filter(function (e) { return e.peAt !== null; });
+    function avgDelay() {
+      var s = 0;
+      engaged.forEach(function (e) { s += (e.peAt - e.startIdx); });
+      return engaged.length ? s / engaged.length : null;
+    }
+    var d = avgDelay();
+    return {
+      available: true,
+      episodes: episodes.length,
+      peEngaged: engaged.length,
+      engageFraction: episodes.length ? round2(engaged.length / episodes.length) : 0,
+      avgDelaySamples: d !== null ? round2(d) : null,
+      avgDelaySec: d !== null ? round2(d * 0.145) : null,
+      minEpisodes: PE_MIN_EPISODES,
+      tpsThreshold: PE_TPS_MIN,
+      peLambda: PE_LAMBDA_MAX
+    };
+  }
+
+  /**
    * Bank-imbalance diagnostic.
    *
    * When both banks' trims are logged, a large bank-to-bank split in the
@@ -660,6 +821,8 @@
       knock: analyzeKnock(rows, mapResult),
       lambda: analyzeLambda(rows, mapResult),
       narrowband: analyzeNarrowband(rows, mapResult),
+      tipIn: analyzeTipIn(rows, mapResult),
+      peEntry: analyzePeEntry(rows, mapResult),
       bankImbalance: analyzeBankImbalance(rows, mapResult),
       baro: (typeof P66.analyzeBaro === 'function')
         ? P66.analyzeBaro(rows, mapResult, altitudeFt)
@@ -677,6 +840,8 @@
   P66.analyzeKnock = analyzeKnock;
   P66.analyzeLambda = analyzeLambda;
   P66.analyzeNarrowband = analyzeNarrowband;
+  P66.analyzeTipIn = analyzeTipIn;
+  P66.analyzePeEntry = analyzePeEntry;
   P66.analyzeSession = analyzeSession;
   P66.toLambda = toLambda;
   P66.REGIONS = REGIONS;

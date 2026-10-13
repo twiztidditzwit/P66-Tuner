@@ -357,6 +357,133 @@
   }
 
   /**
+   * Accel-enrichment suggestions from tip-in analysis.
+   *
+   * When most throttle stabs in the log produce a lean spike (narrowband O2
+   * dipping below ~250 mV right after the stab), the AE shot is too small
+   * and the engine stumbles lean on tip-in — the classic "dead throttle"
+   * feel. The fix is more AE: scale up the AE vs D-TPS multiplier tables.
+   *
+   * Gates: minimum event count, majority-lean fraction, and O2 sensor
+   * health (a lazy/dead sensor fakes lean dips — reuse the narrowband
+   * crosscount health check). Cold events are excluded from the fraction
+   * when warm events exist, since cold enrichment masks AE behavior.
+   */
+  var AE_MAX_DELTA_PCT = 20; // cap on AE increase per pass
+
+  function aeSuggestions(tipInReport, nbReport, gates) {
+    var out = [];
+    if (!tipInReport || !tipInReport.available) return out;
+    if (!tipInReport.events) return out; // no stabs logged at all
+    if (tipInReport.events < tipInReport.minEvents) {
+      // Too few stabs to act on, but report what was seen.
+      var someLean = tipInReport.leanEvents > 0;
+      out.push({
+        kind: 'ae', table: 'AE Multiplier vs D-TPS', cell: 'tip-in',
+        action: 'none', deltaPct: 0,
+        reason: 'Only ' + tipInReport.events + ' sharp throttle stab(s) in this log (need ' +
+          tipInReport.minEvents + ').' +
+          (someLean ? ' ' + tipInReport.leanEvents + ' of them showed a lean spike — log more aggressive ' +
+            'tip-ins and the tuner can fatten up accel enrichment.' : '') +
+          ' No change suggested.',
+        confidence: 'low', samples: tipInReport.events
+      });
+      return out;
+    }
+
+    // O2 health gate: a lazy or dead sensor produces fake lean dips.
+    var o2Ok = true, o2Note = '';
+    if (nbReport && nbReport.available && nbReport.crossCounts) {
+      var bad = nbReport.crossCounts.filter(function (c) {
+        return c.health === 'dead' || c.health === 'lazy';
+      });
+      if (bad.length === nbReport.crossCounts.length && bad.length > 0) {
+        o2Ok = false;
+        o2Note = ' O2 sensor(s) read ' + bad[0].health +
+          ' — fix the sensor before trusting tip-in lean readings.';
+      }
+    }
+    // Prefer warm events when they exist.
+    var frac = tipInReport.warmEvents >= tipInReport.minEvents
+      ? tipInReport.warmLeanFraction : tipInReport.leanFraction;
+    var n = tipInReport.warmEvents >= tipInReport.minEvents
+      ? tipInReport.warmEvents : tipInReport.events;
+    if (!o2Ok) {
+      out.push({
+        kind: 'ae', table: 'AE Multiplier vs D-TPS', cell: 'tip-in',
+        action: 'none', deltaPct: 0,
+        reason: tipInReport.leanEvents + ' of ' + tipInReport.events +
+          ' throttle stabs showed a lean spike, but the O2 sensor health check failed.' + o2Note,
+        confidence: 'low', samples: tipInReport.events
+      });
+      return out;
+    }
+    if (frac < 0.5) return out; // AE looks adequate
+
+    var delta = Math.min(AE_MAX_DELTA_PCT, gates.maxFuelDeltaPct * 2);
+    var confidence = (frac >= 0.75 && n >= 10) ? 'high' : 'medium';
+    out.push({
+      kind: 'ae', table: 'AE Multiplier vs D-TPS', cell: 'tip-in',
+      action: 'increase', deltaPct: delta,
+      reason: leanText(tipInReport, frac, n) +
+        ' The accel-enrichment shot is too small — the engine goes lean every time you stab ' +
+        'the throttle. This tune increases AE fueling by about ' + delta + '%.',
+      confidence: confidence,
+      samples: tipInReport.events
+    });
+    return out;
+
+    function leanText(r, f, count) {
+      return r.leanEvents + ' of ' + r.events + ' throttle stabs (' +
+        Math.round(f * 100) + '% of the ' + count + ' usable events) showed a lean spike ' +
+        '(O2 dipped below ' + r.leanThresholdMv + ' mV within ~1 s of the stab' +
+        (r.avgMinO2 !== null ? ', avg dip to ' + r.avgMinO2 + ' mV' : '') + ').';
+    }
+  }
+
+  /**
+   * PE-entry suggestions from high-throttle episode analysis.
+   *
+   * When the log shows repeated high-throttle episodes where power
+   * enrichment engages late or not at all, WOT response is lazy: the engine
+   * stays near stoich while the driver is asking for full power. The fix is
+   * an earlier PE entry — a lower TPS% threshold vs RPM.
+   *
+   * Capped at -10% per pass and floored at ~50% TPS by the patcher, so
+   * repeated runs cannot drag PE into part-throttle cruise.
+   */
+  var PE_ENTRY_MAX_DELTA_PCT = 10; // cap on threshold reduction per pass
+
+  function peEntrySuggestions(peEntryReport, gates) {
+    var out = [];
+    if (!peEntryReport || !peEntryReport.available) return out;
+    if (peEntryReport.episodes < peEntryReport.minEpisodes) return out;
+    if (peEntryReport.engageFraction >= 0.5 &&
+        (peEntryReport.avgDelaySec === null || peEntryReport.avgDelaySec <= 2)) {
+      return out; // PE engages promptly
+    }
+
+    var delta = -Math.min(PE_ENTRY_MAX_DELTA_PCT, gates.maxFuelDeltaPct * 2);
+    var why = peEntryReport.engageFraction < 0.5
+      ? 'power enrichment failed to engage in ' +
+        (peEntryReport.episodes - peEntryReport.peEngaged) + ' of ' +
+        peEntryReport.episodes + ' high-throttle episodes'
+      : 'power enrichment took ~' + peEntryReport.avgDelaySec +
+        ' s to engage after full throttle';
+    out.push({
+      kind: 'pe-entry', table: 'TPS% Threshold to Enter PE vs RPM', cell: 'high throttle',
+      action: 'lower', deltaPct: delta,
+      reason: 'High-throttle log review: ' + why +
+        ' — the engine stays near stoich while you are asking for full power. ' +
+        'This tune brings PE in earlier by lowering the TPS entry threshold about ' +
+        Math.abs(delta) + '%.',
+      confidence: peEntryReport.episodes >= 6 ? 'high' : 'medium',
+      samples: peEntryReport.episodes
+    });
+    return out;
+  }
+
+  /**
    * Generate the full suggestion set for a session report.
    * mode: 'conservative' | 'balanced' | 'aggressive'
    * catalog: XDF catalog used for spark-cell repeatability gating
@@ -368,7 +495,9 @@
     var suggestions = []
       .concat(fuelSuggestions(report.fuelTrims, gates, report.narrowband, report.bankImbalance))
       .concat(sparkSuggestions(report.knock, gates, catalog))
-      .concat(peSuggestions(report.lambda, gates));
+      .concat(peSuggestions(report.lambda, gates))
+      .concat(aeSuggestions(report.tipIn, report.narrowband, gates))
+      .concat(peEntrySuggestions(report.peEntry, gates));
 
     var actionable = suggestions.filter(function (s) { return s.action !== 'none'; });
     var blocked = suggestions.filter(function (s) { return s.action === 'none'; });

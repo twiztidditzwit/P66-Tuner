@@ -482,12 +482,139 @@
     return { patches: patches, patched: patched, error: null };
   }
 
+  /**
+   * Scale the accel-enrichment vs D-TPS multiplier tables.
+   *
+   * The PCM has two AE tables indexed by throttle-movement rate (D-TPS):
+   * the async shot ('AE Async Multiplier vs D-TPS', 0xA26 — fires an
+   * immediate extra pulse on a stab) and the sync adder ('AE Multipler vs
+   * D-TPS', 0xA59 — extra fuel on the following injections; note the XDF's
+   * "Multipler" typo, matched verbatim). Both are 8-bit X/256 multipliers,
+   * so a percentage scale of the raw bytes is a percentage scale of the
+   * fuel. The D-TPS axis breakpoints are implicit in the PCM (not in the
+   * XDF), so the whole curve scales together, preserving its shape.
+   *
+   * Only suggestions with kind === 'ae', action === 'increase' and a
+   * nonzero deltaPct produce patches. Rows already at 255 stay at 255.
+   * Returns { patches, patched, error, warnings }.
+   */
+  var AE_TABLES = ['AE Async Multiplier vs D-TPS', 'AE Multipler vs D-TPS'];
+
+  function applyAeSuggestions(catalog, binBytes, suggestions, options) {
+    options = options || {};
+    var s = null;
+    (suggestions || []).forEach(function (x) {
+      if (!s && x.kind === 'ae' && x.action === 'increase' && x.deltaPct) s = x;
+    });
+    if (!s) return { patches: [], patched: new Uint8Array(binBytes), error: null, warnings: [] };
+
+    var factor = 1 + s.deltaPct / 100;
+    var patched = new Uint8Array(binBytes); // copy
+    var patches = [];
+    var warnings = [];
+    AE_TABLES.forEach(function (name) {
+      var t = readTable(catalog, name, patched);
+      if (!t) {
+        warnings.push(name + ': table not readable from this binary/catalog — skipped');
+        return;
+      }
+      var eb = t.elementBytes;
+      var maxRaw = eb === 2 ? 0xFFFF : 0xFF;
+      for (var r = 0; r < t.rows; r++) {
+        for (var c = 0; c < t.cols; c++) {
+          var addr = t.base + (r * t.cols + c) * eb;
+          var oldValue = t.values[r][c];
+          var newValue = Math.min(maxRaw, Math.round(oldValue * factor));
+          if (newValue === oldValue) continue;
+          writeRaw(patched, addr, eb, newValue);
+          patches.push({
+            table: name,
+            address: addr,
+            addressHex: '0x' + addr.toString(16).toUpperCase(),
+            sizeBytes: eb,
+            rpm: null,
+            map: null,
+            oldValue: oldValue,
+            newValue: newValue,
+            deltaPct: Math.round(s.deltaPct * 100) / 100,
+            smoothed: false,
+            confidence: s.confidence || null
+          });
+        }
+      }
+    });
+
+    if (!patches.length && warnings.length) {
+      return { patches: [], patched: null, error: warnings.join(' / '), warnings: [] };
+    }
+    return { patches: patches, patched: patched, error: null, warnings: warnings };
+  }
+
+  /**
+   * Lower the PE TPS entry threshold ('TPS% Threshold to Enter PE vs RPM').
+   *
+   * The stock calibration waits for ~70% TPS before power enrichment; this
+   * scales the 8-bit threshold table down so PE engages earlier. Each cell
+   * is floored at raw 128 (~50% TPS) so repeated passes cannot drag PE into
+   * part-throttle cruise. Only suggestions with kind === 'pe-entry',
+   * action === 'lower' and a nonzero deltaPct produce patches.
+   * Returns { patches, patched, error, warnings }.
+   */
+  var PE_ENTRY_TABLE = 'TPS% Threshold to Enter PE vs RPM';
+  var PE_ENTRY_FLOOR_RAW = 128; // ~50% TPS
+
+  function applyPeEntrySuggestions(catalog, binBytes, suggestions, options) {
+    options = options || {};
+    var s = null;
+    (suggestions || []).forEach(function (x) {
+      if (!s && x.kind === 'pe-entry' && x.action === 'lower' && x.deltaPct) s = x;
+    });
+    if (!s) return { patches: [], patched: new Uint8Array(binBytes), error: null, warnings: [] };
+
+    var t = readTable(catalog, PE_ENTRY_TABLE, binBytes);
+    if (!t) {
+      return { patches: [], patched: null,
+        error: PE_ENTRY_TABLE + ': table not readable from this binary/catalog', warnings: [] };
+    }
+    var factor = 1 + s.deltaPct / 100;
+    var eb = t.elementBytes;
+    var maxRaw = eb === 2 ? 0xFFFF : 0xFF;
+    var patched = new Uint8Array(binBytes); // copy
+    var patches = [];
+    var rpmBp = axisBreakpoints(t.table.yAxis);
+    for (var r = 0; r < t.rows; r++) {
+      for (var c = 0; c < t.cols; c++) {
+        var addr = t.base + (r * t.cols + c) * eb;
+        var oldValue = t.values[r][c];
+        var newValue = Math.min(maxRaw, Math.max(PE_ENTRY_FLOOR_RAW, Math.round(oldValue * factor)));
+        if (newValue === oldValue) continue;
+        writeRaw(patched, addr, eb, newValue);
+        patches.push({
+          table: PE_ENTRY_TABLE,
+          address: addr,
+          addressHex: '0x' + addr.toString(16).toUpperCase(),
+          sizeBytes: eb,
+          rpm: rpmBp[r] !== undefined ? rpmBp[r] : null,
+          map: null,
+          oldValue: oldValue,
+          newValue: newValue,
+          deltaPct: Math.round(s.deltaPct * 100) / 100,
+          smoothed: false,
+          confidence: s.confidence || null
+        });
+      }
+    }
+    return { patches: patches, patched: patched, error: null, warnings: [] };
+  }
+
   P66.findTable = findTable;
   P66.readTable = readTable;
   P66.mapTrimCellToVE = mapTrimCellToVE;
   P66.applyFuelSuggestions = applyFuelSuggestions;
   P66.applySparkSuggestions = applySparkSuggestions;
   P66.applyPeSuggestions = applyPeSuggestions;
+  P66.applyAeSuggestions = applyAeSuggestions;
+  P66.applyPeEntrySuggestions = applyPeEntrySuggestions;
   P66.rawPerDegree = rawPerDegree;
 
   /* ---------- XDF XML parsing (browser + node) ---------- */
