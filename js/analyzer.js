@@ -158,6 +158,13 @@
     // table, so they are excluded before any averaging happens.
     var q = qualityRows(rows, mapResult);
     rows = q.rows;
+    // Idle-VE detection: the PCM runs the Idle VE table (not Main VE) when
+    // idle entry conditions hold. Thresholds below are the stock-calibration
+    // entry values ("Idle VE Possible" scalars: 1450 RPM, ~2% TPS, 2 MPH).
+    // TPS/VSS channels are optional — without them we fall back to RPM-only.
+    var IDLE_RPM_MAX = 1450, IDLE_TPS_MAX = 2, IDLE_VSS_MAX = 3;
+    var tpsCol = P66.columnFor(mapResult, 'TPS');
+    var vssCol = P66.columnFor(mapResult, 'VSS');
     // Detect each trim column's encoding once.
     var styles = banks.map(function (b) {
       return {
@@ -165,7 +172,7 @@
         ltft: b.ltft ? P66.detectTrimStyle(sampleColumn(rows, b.ltft)) : 'percent'
       };
     });
-    var cells = {}; // "rpmBin|mapBin" -> { count, sum, sumSq }
+    var cells = {}; // "rpmBin|mapBin" -> { count, sum, sumSq, idle }
     var totalAbs = 0, totalN = 0;
     rows.forEach(function (row) {
       var rpm = num(row[rpmCol]);
@@ -179,8 +186,15 @@
       });
       var combined = bankTrims.reduce(function (a, t) { return a + t; }, 0) / bankTrims.length;
       var key = rpmBin(rpm) + '|' + mapBin(map);
-      var c = cells[key] || (cells[key] = { count: 0, sum: 0, sumSq: 0 });
+      var c = cells[key] || (cells[key] = { count: 0, sum: 0, sumSq: 0, idle: 0 });
       c.count++; c.sum += combined; c.sumSq += combined * combined;
+      // Was the PCM on the Idle VE table for this sample? Entry conditions
+      // from the calibration; missing TPS/VSS channels fall back to RPM-only.
+      var tps = tpsCol ? num(row[tpsCol]) : null;
+      var vss = vssCol ? num(row[vssCol]) : null;
+      if (rpm < IDLE_RPM_MAX &&
+          (tps === null || tps < IDLE_TPS_MAX) &&
+          (vss === null || vss < IDLE_VSS_MAX)) c.idle++;
       totalAbs += Math.abs(combined); totalN++;
     });
     var cellList = Object.keys(cells).map(function (key) {
@@ -192,7 +206,10 @@
         rpmBin: parts[0], mapBin: parts[1],
         samples: c.count,
         avgTrim: round2(mean),
-        stddev: round2(Math.sqrt(variance))
+        stddev: round2(Math.sqrt(variance)),
+        // Fraction of this cell's samples logged while the PCM was on the
+        // Idle VE table. The tuner routes majority-idle cells there.
+        idleFraction: round2(c.idle / c.count)
       };
     }).sort(function (a, b) { return Math.abs(b.avgTrim) - Math.abs(a.avgTrim); });
 

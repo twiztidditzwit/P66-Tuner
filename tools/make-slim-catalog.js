@@ -3,7 +3,8 @@
  *
  *   node tools/make-slim-catalog.js
  *
- * Extracts just the tables the patchers need (Main VE, Main Spark Advance)
+ * Extracts just the tables the patchers need (Main VE, Idle VE,
+ * Main Spark Advance, Power Enrichment Target AFR)
  * from the full catalog and writes js/bundled-catalog.js as
  * P66.BUNDLED_CATALOG. The easy-mode wizard uses this so users never
  * have to find or upload an XDF — the definitions ship with the app.
@@ -17,7 +18,7 @@ var fs = require('fs');
 var path = require('path');
 var ROOT = path.join(__dirname, '..');
 
-var WANT = ['Main VE', 'Main Spark Advance', 'Power Enrichment Target AFR'];
+var WANT = ['Main VE', 'Idle VE', 'Main Spark Advance', 'Power Enrichment Target AFR'];
 
 var full = JSON.parse(fs.readFileSync(path.join(ROOT, 'defs', 'xdf', 'p66-v6-34l.catalog.json'), 'utf8'));
 
@@ -55,7 +56,7 @@ var slim = {
 var lines = [
   '/* P66 bundled table definitions — GENERATED, do not edit.',
   ' * Built by tools/make-slim-catalog.js from defs/xdf/p66-v6-34l.catalog.json.',
-  ' * Contains only the tables the patchers need: Main VE, Main Spark Advance, Power Enrichment Target AFR.',
+  ' * Contains only the tables the patchers need: Main VE, Idle VE, Main Spark Advance, Power Enrichment Target AFR.',
   ' * Table definitions derived from Robert Saar\'s P66 V6 XDF.',
   ' */',
   '(function (global) {',

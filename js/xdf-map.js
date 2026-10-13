@@ -160,27 +160,72 @@
   }
 
   /**
-   * Turn fuel suggestions into binary patches against the Main VE table.
+   * Turn fuel suggestions into binary patches, routing each suggestion to
+   * its target VE table (suggestion.table, default 'Main VE'). The PCM runs
+   * the Idle VE table at idle and Main VE everywhere else, so idle-region
+   * corrections must land in Idle VE — patching Main VE alone mistunes idle.
+   *
    * Only suggestions with action !== 'none' and a nonzero delta produce patches.
    *
    * veTableName may be omitted in favor of an options object:
    *   applyFuelSuggestions(catalog, bin, suggestions, { smooth: false })
-   * options.smooth (default true) tapers uncorrected neighbors around each
-   * corrected cell; options.rings overrides the default
+   * An explicit veTableName overrides per-suggestion routing (legacy
+   * single-table mode). options.smooth (default true) tapers uncorrected
+   * neighbors around each corrected cell; options.rings overrides the default
    * [{ radius: 1, factor: 0.5 }, { radius: 2, factor: 0.25 }].
+   *
+   * Returns { patches, patched, error, warnings }. warnings covers partial
+   * problems (e.g. a target table missing from the catalog); error is set
+   * only when no patches could be produced at all.
    */
   function applyFuelSuggestions(catalog, binBytes, suggestions, veTableName, options) {
     if (veTableName && typeof veTableName === 'object') {
       options = veTableName;
-      veTableName = 'Main VE';
+      veTableName = null;
     }
-    veTableName = veTableName || 'Main VE';
     options = options || {};
     var smooth = options.smooth !== false;
     var rings = options.rings || [{ radius: 1, factor: 0.5 }, { radius: 2, factor: 0.25 }];
 
-    var ve = readTable(catalog, veTableName, binBytes);
-    if (!ve) return { patches: [], patched: null, error: 'Main VE table not readable' };
+    // Group actionable fuel suggestions by target table.
+    var groups = {};
+    var order = [];
+    (suggestions || []).forEach(function (s) {
+      if (!s || s.kind !== 'fuel' || s.action === 'none' || !s.deltaPct) return;
+      var t = veTableName || s.table || 'Main VE';
+      if (!groups[t]) { groups[t] = []; order.push(t); }
+      groups[t].push(s);
+    });
+
+    var patched = new Uint8Array(binBytes); // working copy, accumulates tables
+    var allPatches = [];
+    var tableErrors = [];
+    order.forEach(function (t) {
+      var r = patchVeTable(catalog, t, patched, groups[t], smooth, rings);
+      if (r.error) {
+        // A missing/unreadable table kills only its own suggestions.
+        tableErrors.push(t + ': ' + r.error + ' (' + groups[t].length + ' suggestion(s) skipped)');
+        return;
+      }
+      allPatches = allPatches.concat(r.patches);
+    });
+
+    if (!allPatches.length && tableErrors.length) {
+      return { patches: [], patched: null, error: tableErrors.join(' / '), warnings: [] };
+    }
+    // Partial failure (some tables patched, some skipped) is a warning, not
+    // an error, so callers keep the good patches.
+    return { patches: allPatches, patched: patched, error: null, warnings: tableErrors };
+  }
+
+  /**
+   * Single-table patch pipeline: read the table, build the delta grid from
+   * this table's suggestions, optionally smooth buffer rings, and write the
+   * patches into binImage (modified in place). Returns { patches, error }.
+   */
+  function patchVeTable(catalog, tableName, binImage, suggestions, smooth, rings) {
+    var ve = readTable(catalog, tableName, binImage);
+    if (!ve) return { patches: [], error: 'table not readable from this binary/catalog' };
     var eb = ve.elementBytes;
     var base = ve.base;
     var rows = ve.rows, cols = ve.cols;
@@ -196,7 +241,6 @@
       metaGrid.push(new Array(cols).fill(null));
     }
     suggestions.forEach(function (s) {
-      if (s.kind !== 'fuel' || s.action === 'none' || !s.deltaPct) return;
       // Recover the trim cell's bin labels from the suggestion's cell text:
       // "2000-2500 RPM / 80-90 kPa".
       var m = /^(\S+)\s*RPM\s*\/\s*(\S+)\s*kPa/.exec(s.cell || '');
@@ -213,7 +257,6 @@
     var finalGrid = smooth ? smoothDeltaGrid(deltaGrid, rows, cols, rings) : deltaGrid;
 
     // 3. Write patches.
-    var patched = new Uint8Array(binBytes); // copy
     var patches = [];
     for (var ri = 0; ri < rows; ri++) {
       for (var ci = 0; ci < cols; ci++) {
@@ -222,10 +265,10 @@
         var addr = base + (ri * cols + ci) * eb;
         var oldValue = ve.values[ri][ci];
         var newValue = Math.min(maxRaw, Math.max(0, Math.round(oldValue * (1 + d / 100))));
-        writeRaw(patched, addr, eb, newValue);
+        writeRaw(binImage, addr, eb, newValue);
         var meta = metaGrid[ri][ci];
         patches.push({
-          table: veTableName,
+          table: tableName,
           address: addr,
           addressHex: '0x' + addr.toString(16).toUpperCase(),
           sizeBytes: eb,
@@ -240,7 +283,7 @@
       }
     }
 
-    return { patches: patches, patched: patched, error: null };
+    return { patches: patches, error: null };
   }
 
   /**

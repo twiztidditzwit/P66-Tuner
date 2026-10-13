@@ -65,12 +65,16 @@
       });
     }
     fuelReport.cells.forEach(function (cell) {
+      // Route to the table the PCM was actually using: a cell whose samples
+      // were mostly logged under idle entry conditions belongs to Idle VE.
+      var idleFrac = cell.idleFraction || 0;
+      var targetTable = idleFrac >= 0.5 ? 'Idle VE' : 'Main VE';
       if (cell.samples < gates.minCellSamples) {
         out.push({
-          kind: 'fuel', table: 'VE/MAF', cell: cell.rpmBin + ' RPM / ' + cell.mapBin + ' kPa',
+          kind: 'fuel', table: targetTable, cell: cell.rpmBin + ' RPM / ' + cell.mapBin + ' kPa',
           action: 'none', deltaPct: 0,
           reason: 'Low confidence: only ' + cell.samples + ' samples (need ' + gates.minCellSamples + '). No change suggested.',
-          confidence: 'low', samples: cell.samples
+          confidence: 'low', samples: cell.samples, idleFraction: idleFrac
         });
         return;
       }
@@ -107,13 +111,18 @@
         if (confidence === 'high') confidence = 'medium';
       }
       out.push({
-        kind: 'fuel', table: 'VE/MAF', cell: cell.rpmBin + ' RPM / ' + cell.mapBin + ' kPa',
+        kind: 'fuel', table: targetTable, cell: cell.rpmBin + ' RPM / ' + cell.mapBin + ' kPa',
         action: delta > 0 ? 'add fuel' : 'remove fuel', deltaPct: delta,
         reason: 'Avg combined trim ' + (cell.avgTrim > 0 ? '+' : '') + cell.avgTrim +
           '% over ' + cell.samples + ' samples (stddev ' + cell.stddev + ').' +
+          (targetTable === 'Idle VE'
+            ? ' Targets the Idle VE table (' + Math.round(idleFrac * 100) +
+              '% of this cell\'s samples were logged at idle).'
+            : '') +
           (capped ? ' Capped at mode limit; re-log and iterate.' : '') + corroboration + imbalanceNote,
         confidence: confidence,
-        samples: cell.samples
+        samples: cell.samples,
+        idleFraction: idleFrac
       });
     });
     return out;
