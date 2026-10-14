@@ -37,6 +37,8 @@
                 'spark (deg)', 'total timing', 'sparkadv'],
     INJ_PW: ['injector pulse width', 'inj pw', 'injector_pw', 'pulse width', 'ipw',
              'injpw ms', 'fuel pw'],
+    INJ_DC: ['injector duty cycle', 'inj duty cycle', 'injector dc', 'inj dc'],
+    IAC: ['iac position', 'iac steps', 'idle air control position', 'iac counts'],
     VSS: ['vss', 'vehicle speed', 'vehicle_speed', 'mph', 'kph', 'speed'],
     BARO: ['baro', 'barometric', 'barometric pressure', 'baro kpa', 'barometer'],
     O2_B1: ['o2 b1', 'o2 bank 1', 'left/front o2', 'left front o2', 'front o2',

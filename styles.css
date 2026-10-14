@@ -496,3 +496,87 @@ footer.container {
   color: #5a6575;
   background: transparent;
 }
+
+/* ---- Log Playback HUD (TunerPro-style dashboard) ---- */
+.pb-transport {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.pb-play {
+  width: 2.6rem;
+  height: 2.6rem;
+  font-size: 1.1rem;
+  border-radius: 50%;
+  border: 1px solid #3a4657;
+  background: #1a2230;
+  color: #e8edf3;
+  cursor: pointer;
+  flex: none;
+}
+.pb-play:hover { background: #232c3d; }
+.pb-scrub {
+  flex: 1;
+  accent-color: #e0574f;
+  cursor: pointer;
+}
+.pb-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 9rem;
+  text-align: right;
+}
+.pb-speed { display: flex; gap: 0.25rem; }
+.pb-speed-btn {
+  border: 1px solid #3a4657;
+  background: #141a26;
+  color: #9aa4b2;
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.pb-speed-btn.active {
+  color: #e8edf3;
+  border-color: #e0574f;
+  background: #232c3d;
+}
+.pb-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.pb-tile {
+  background: #10141c;
+  border: 2px solid #3a4657;
+  border-radius: 2px;
+  padding: 0.5rem 0.25rem 0.4rem;
+  text-align: center;
+  min-height: 5.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.pb-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-value {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.pb-unit {
+  font-size: 0.72rem;
+  color: #8a94a3;
+}
+@media (max-width: 900px) {
+  .pb-grid { grid-template-columns: repeat(2, 1fr); }
+  .pb-value { font-size: 1.5rem; }
+}

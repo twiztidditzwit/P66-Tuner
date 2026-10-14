@@ -593,6 +593,7 @@
           resetDashboardPlaceholders();
           refreshSummary();
           renderMappingPreview();
+          P66.renderPlayback(document.getElementById('playback-hud'), parsedLog, mapResult);
           writeConsole('LOG parsed: ' + parsedLog.rowCount + ' rows, ' +
             parsedLog.columnCount + ' columns (delimiter: ' +
             (parsedLog.delimiter === '\t' ? 'TAB' : parsedLog.delimiter) + ').');
@@ -627,7 +628,10 @@
           writeConsole('Failed to read BIN file: ' + err);
         });
       } else {
-        if (key === 'log') { parsedLog = null; mapResult = null; sessionReport = null; }
+        if (key === 'log') { parsedLog = null; mapResult = null; sessionReport = null;
+          var pbHud = document.getElementById('playback-hud');
+          if (pbHud && pbHud._pbStop) pbHud._pbStop();
+          if (pbHud) pbHud.innerHTML = '<p class="muted">Load a log to play it back.</p>'; }
         if (key === 'xdf') { xdfCatalog = null; }
         if (key === 'bin') { binBytes = null; lastPatches = null; }
         refreshSummary();
