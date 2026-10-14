@@ -95,5 +95,14 @@ check('STFT_B1 falls back to STFT', cols2[10] === 'stft');
 check('LTFT_B2 falls back to LTFT', cols2[13] === 'ltft');
 check('unmapped gauge resolves null', cols2[0] === null);
 
+// ---- 128 color rule ----
+var gc = { color: '#eef1f6' };
+check('pbValueColor red below 128', P66.pbValueColor(gc, 100) === '#ff5a5a');
+check('pbValueColor red on string below 128', P66.pbValueColor(gc, '100') === '#ff5a5a');
+check('pbValueColor blue above 128', P66.pbValueColor(gc, 150) === '#6b9bff');
+check('pbValueColor neutral at exactly 128', P66.pbValueColor(gc, 128) === '#eef1f6');
+check('pbValueColor default on NaN', P66.pbValueColor(gc, NaN) === '#eef1f6');
+check('pbValueColor default on null', P66.pbValueColor(gc, null) === '#eef1f6');
+
 console.log(checks + ' checks, ' + failures + ' failures.');
 process.exit(failures ? 1 : 0);

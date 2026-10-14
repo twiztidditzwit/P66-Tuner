@@ -55,6 +55,20 @@
   }
 
   /**
+   * Value color under the 128 rule: below 128 (rich / removing fuel) renders
+   * red, above 128 (lean / adding fuel) renders blue, exactly 128 keeps the
+   * gauge's default color. Non-numeric values keep the default color too.
+   */
+  var PB_RED = '#ff5a5a';
+  var PB_BLUE = '#6b9bff';
+  function pbValueColor(g, v) {
+    var n = (typeof v === 'number') ? v : parseFloat(v);
+    if (!isFinite(n)) return g.color;
+    if (n < 128) return PB_RED;
+    if (n > 128) return PB_BLUE;
+    return g.color;
+  }
+  /**
    * Build the per-row timestamp array. Falls back to row-index timing when
    * the TIME channel is missing or non-numeric.
    * Returns { times: number[], indexed: boolean }.
@@ -190,9 +204,11 @@
       for (var gi = 0; gi < HUD_GAUGES.length; gi++) {
         var g = HUD_GAUGES[gi];
         var col = cols[gi];
-        var v = col ? row[col] : null;
-        if (g.toAfr) v = pbToAfr(v);
-        valEls[gi].textContent = pbFmt(v, g.decimals);
+        var raw = col ? row[col] : null;
+        var num = (typeof raw === 'number') ? raw : parseFloat(raw);
+        if (g.toAfr) num = pbToAfr(num);
+        valEls[gi].textContent = pbFmt(num, g.decimals);
+        valEls[gi].style.color = pbValueColor(g, num);
       }
       scrub.value = String(idx);
       timeLabel.textContent = fmtClock(state.cur, tb.indexed) + ' / ' + fmtClock(tMax, tb.indexed);
@@ -262,6 +278,7 @@
   P66.pbToAfr = pbToAfr;
   P66.pbBuildTimes = pbBuildTimes;
   P66.pbRowIndexAt = pbRowIndexAt;
+  P66.pbValueColor = pbValueColor;
   P66.pbResolveColumns = pbResolveColumns;
   P66.renderPlayback = renderPlayback;
 })(typeof window !== 'undefined' ? window : global);
