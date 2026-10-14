@@ -9,6 +9,13 @@
   var P66 = (global.P66 = global.P66 || {});
   var SVGNS = 'http://www.w3.org/2000/svg';
 
+  // Operating points on the VE 3D surface: stride-sampled (rpm, map) log
+  // samples drawn as dots on the surface. The log source is provided by
+  // the host app via P66.setVePointsSource(); it stays null until a log
+  // is loaded, in which case the toggle shows a disabled/hint state.
+  var VE_POINTS_MAX = 2000;
+  var vePointsSource = null; // { parsedLog, mapResult } | null
+
   function el(tag, attrs, parent) {
     var n = document.createElementNS(SVGNS, tag);
     if (attrs) {
@@ -772,6 +779,41 @@
         dsWrap.appendChild(b);
       });
       gridBox.appendChild(dsWrap);
+
+      // Operating-points toggle: ON scatters stride-sampled log samples
+      // as dots on the 3D surface. Default OFF. When no log source has
+      // been provided via P66.setVePointsSource(), the toggle is disabled
+      // with a hint.
+      var ptsInfo = vePointsResolve(data);
+      var showPoints = false;
+      var ptsRow = document.createElement('p');
+      ptsRow.className = 've-toggle ve-points-row';
+      var ptsLabel = document.createElement('label');
+      ptsLabel.className = 've-points-label';
+      var ptsBox = document.createElement('input');
+      ptsBox.type = 'checkbox';
+      ptsBox.checked = false;
+      var ptsDot = document.createElement('span');
+      ptsDot.className = 've-points-dot';
+      ptsDot.setAttribute('aria-hidden', 'true');
+      ptsLabel.appendChild(ptsBox);
+      ptsLabel.appendChild(ptsDot);
+      ptsLabel.appendChild(document.createTextNode(' Operating points'));
+      ptsRow.appendChild(ptsLabel);
+      var ptsHint = document.createElement('span');
+      ptsHint.className = 've-points-hint muted';
+      if (ptsInfo) {
+        ptsHint.textContent = ' — ' + ptsInfo.points.length + ' log samples';
+      } else {
+        ptsBox.disabled = true;
+        ptsHint.textContent = ' (load a log to show operating points)';
+      }
+      ptsRow.appendChild(ptsHint);
+      gridBox.appendChild(ptsRow);
+      ptsBox.addEventListener('change', function () {
+        showPoints = ptsBox.checked;
+      });
+
       var canvas = document.createElement('canvas');
       gridBox.appendChild(canvas);
       var hint = document.createElement('p');
@@ -779,7 +821,10 @@
       hint.textContent = 'Drag to rotate · scroll to zoom · slowly auto-rotates when idle';
       gridBox.appendChild(hint);
       try {
-        container._veStop = renderVeSurface(canvas, data, function () { return dataset; });
+        container._veStop = renderVeSurface(canvas, data, function () { return dataset; }, {
+          getShowPoints: function () { return showPoints; },
+          getPoints: function () { return ptsInfo ? ptsInfo.points : []; }
+        });
       } catch (e) {
         gridBox.innerHTML = '<p class="muted">3D view unavailable: ' + (e && e.message ? e.message : e) + '</p>';
       }
@@ -852,6 +897,123 @@
   }
 
   /**
+   * Pure stride sampler for operating points (testable in node).
+   * Evenly samples up to maxPoints { rpm, map } pairs across the WHOLE
+   * log (not just the first rows). rows: parsed-log row objects keyed by
+   * header name; rpmCol/mapCol: column names from P66.columnFor().
+   * Rows with non-numeric rpm/map are dropped; the stride is computed
+   * over the valid rows so coverage still spans the session.
+   */
+  function vePointsSample(rows, rpmCol, mapCol, maxPoints) {
+    maxPoints = maxPoints === undefined ? VE_POINTS_MAX : maxPoints;
+    if (!rows || !rows.length || !rpmCol || !mapCol || !(maxPoints > 0)) return [];
+    var valid = [];
+    for (var i = 0; i < rows.length; i++) {
+      if (num(rows[i][rpmCol]) !== null && num(rows[i][mapCol]) !== null) valid.push(i);
+    }
+    if (!valid.length) return [];
+    var n = Math.min(maxPoints, valid.length);
+    var pts = [];
+    for (var k = 0; k < n; k++) {
+      var r = valid[Math.floor(k * valid.length / n)];
+      pts.push({ rpm: num(rows[r][rpmCol]), map: num(rows[r][mapCol]) });
+    }
+    return pts;
+  }
+
+  /**
+   * Pure range filter for operating points (testable in node).
+   * Drops points outside the table's RPM x MAP axis range (inclusive).
+   * Breakpoints may run ascending or descending.
+   */
+  function vePointsInRange(points, rpmBp, mapBp) {
+    if (!points || !points.length) return [];
+    if (!rpmBp || rpmBp.length < 2 || !mapBp || mapBp.length < 2) return [];
+    var rmin = Math.min.apply(null, rpmBp), rmax = Math.max.apply(null, rpmBp);
+    var mmin = Math.min.apply(null, mapBp), mmax = Math.max.apply(null, mapBp);
+    if (!isFinite(rmin) || !isFinite(rmax) || !isFinite(mmin) || !isFinite(mmax)) return [];
+    return points.filter(function (p) {
+      return p.rpm >= rmin && p.rpm <= rmax && p.map >= mmin && p.map <= mmax;
+    });
+  }
+
+  /**
+   * Pure: map a physical value to a fractional cell coordinate on a
+   * monotone breakpoint axis (testable in node). Returns 0..bps.length-1,
+   * or null when outside the axis range. Handles ascending or descending
+   * breakpoints, clamping at exact endpoints.
+   */
+  function veAxisFrac(bps, v) {
+    if (!bps || bps.length < 2) return null;
+    var asc = bps[bps.length - 1] > bps[0];
+    var lo = asc ? bps[0] : bps[bps.length - 1];
+    var hi = asc ? bps[bps.length - 1] : bps[0];
+    if (!(v >= lo && v <= hi)) return null;
+    for (var i = 0; i < bps.length - 1; i++) {
+      var a = bps[i], b = bps[i + 1];
+      var inSeg = asc ? (v >= a && v <= b) : (v <= a && v >= b);
+      if (inSeg) {
+        var t = (b === a) ? 0 : (v - a) / (b - a);
+        return i + Math.max(0, Math.min(1, t));
+      }
+    }
+    return bps.length - 1; // exact endpoint missed by the scan (float dust)
+  }
+
+  /**
+   * Pure: model-space position of an operating point for the 3D view
+   * (testable in node). p: { rpm, map }; model: veSurfaceModel result
+   * ({ nodes, rows, cols }); data: veComparisonData result (rpmBp/mapBp);
+   * heightScale: the same height scale the renderer uses.
+   * Returns { x, y, z } matching the vertex-grid math (x = MAP column,
+   * z = RPM row, y = interpolated surface height), or null when the point
+   * falls outside the table's axis range.
+   */
+  function vePointModel(p, model, data, heightScale) {
+    if (!p || !model || !model.nodes || !data) return null;
+    var rf = veAxisFrac(data.rpmBp, p.rpm);
+    var cf = veAxisFrac(data.mapBp, p.map);
+    if (rf === null || cf === null) return null;
+    var nodes = model.nodes;
+    var r0 = Math.min(Math.floor(rf), data.rows - 2), fv = rf - r0, r1 = r0 + 1;
+    var c0 = Math.min(Math.floor(cf), data.cols - 2), fu = cf - c0, c1 = c0 + 1;
+    if (!nodes[r0] || !nodes[r1] || !nodes[r0][c0] || !nodes[r1][c1]) return null;
+    var h = veBilinear(nodes[r0][c0].h, nodes[r0][c1].h,
+                       nodes[r1][c0].h, nodes[r1][c1].h, fu, fv);
+    return {
+      x: cf - (data.cols - 1) / 2,
+      y: h * heightScale,
+      z: rf - (data.rows - 1) / 2
+    };
+  }
+
+  /**
+   * Set (or clear) the parsed-log source used by the operating-points
+   * overlay. Call after a log is parsed:
+   *   P66.setVePointsSource({ parsedLog: parsedLog, mapResult: mapResult });
+   * Call with null when the log is cleared.
+   */
+  function setVePointsSource(source) {
+    vePointsSource = (source && source.parsedLog && source.mapResult) ? source : null;
+  }
+
+  /**
+   * Resolve sampled operating points for the current 3D table view.
+   * Returns { points, rpmCol, mapCol } or null when no usable log source
+   * (no source set, or RPM/MAP columns not mapped).
+   */
+  function vePointsResolve(data) {
+    if (!vePointsSource || typeof P66.columnFor !== 'function') return null;
+    var rpmCol = P66.columnFor(vePointsSource.mapResult, 'RPM');
+    var mapCol = P66.columnFor(vePointsSource.mapResult, 'MAP');
+    if (!rpmCol || !mapCol || !vePointsSource.parsedLog) return null;
+    var pts = vePointsInRange(
+      vePointsSample(vePointsSource.parsedLog.rows, rpmCol, mapCol, VE_POINTS_MAX),
+      data.rpmBp, data.mapBp);
+    return { points: pts, rpmCol: rpmCol, mapCol: mapCol };
+  }
+
+  /**
    * Pure surface model for the 3D view (testable in node).
    * dataset: 'before' | 'after' | 'change'.
    * Returns per-NODE { h, rgb } so the renderer can bilinearly subdivide
@@ -897,8 +1059,11 @@
    * Interactive 3D VE surface on a canvas. No dependencies — hand-rolled
    * orthographic projection on canvas 2D, so the offline zip still works.
    * Slow auto-rotate, drag to rotate, scroll to zoom. Returns stop().
+   * opts (optional): { getShowPoints(), getPoints() } — when getShowPoints()
+   * is true, stride-sampled operating points are drawn as small dots just
+   * above the surface using the same projection as the surface itself.
    */
-  function renderVeSurface(canvas, data, getDataset) {
+  function renderVeSurface(canvas, data, getDataset, opts) {
     var ctx = canvas.getContext('2d');
     var DPR = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     var W = 620, H = 440;
@@ -920,6 +1085,13 @@
     var dragging = false, lastX = 0, lastY = 0, lastInteract = 0;
     var AUTO_SPEED = 0.0038; // rad/frame — a full turn takes ~28s
     var raf = 0, stopped = false;
+
+    // Operating-points overlay: the host supplies live getters so the
+    // toggle and sample stay in sync without rebuilding the surface.
+    var getShowPoints = opts && typeof opts.getShowPoints === 'function'
+      ? opts.getShowPoints : function () { return false; };
+    var getPoints = opts && typeof opts.getPoints === 'function'
+      ? opts.getPoints : function () { return []; };
 
     // Subdivision quality: each table cell becomes KxK sub-quads with
     // bilinearly interpolated heights/colors for a smooth surface.
@@ -1025,6 +1197,28 @@
         ctx.fillStyle = 'rgba(120,140,170,0.10)';
         ctx.fill();
       }
+
+      // Operating points: stride-sampled log samples as small dots just
+      // above the surface. Drawn before the faces (after the zero plane)
+      // so the surface occludes far-side points correctly. Each point is
+      // interpolated onto the CURRENT dataset's surface and rotated with
+      // the same projection the surface uses.
+      if (getShowPoints()) {
+        var opPts = getPoints() || [];
+        if (opPts.length) {
+          var lift = heightScale * 0.04;
+          ctx.fillStyle = 'rgba(170,220,255,0.5)';
+          for (var pi = 0; pi < opPts.length; pi++) {
+            var pm = vePointModel(opPts[pi], m, data, heightScale);
+            if (!pm) continue;
+            var pr = veRotate(pm.x, pm.y + lift, pm.z, az, el);
+            ctx.beginPath();
+            ctx.arc(ox + pr.x1 * s, oy - pr.y2 * s, 1.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
       for (var fi = 0; fi < faces.length; fi++) {
         var f = faces[fi];
         ctx.beginPath();
@@ -1123,6 +1317,13 @@
   P66.renderVeComparison = renderVeComparison;
   P66.veSurfaceModel = veSurfaceModel;
   P66.renderVeSurface = renderVeSurface;
+  P66.setVePointsSource = setVePointsSource;
+  P66.vePointsSample = vePointsSample;
+  P66.vePointsInRange = vePointsInRange;
+  P66.veAxisFrac = veAxisFrac;
+  P66.vePointModel = vePointModel;
+  P66._vePointsResolve = vePointsResolve;
+  P66.VE_POINTS_MAX = VE_POINTS_MAX;
   P66._veRotate = veRotate;
   P66._veBilinear = veBilinear;
   P66._veFaceLight = veFaceLight;

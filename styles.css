@@ -580,3 +580,11 @@ footer.container {
   .pb-grid { grid-template-columns: repeat(2, 1fr); }
   .pb-value { font-size: 1.5rem; }
 }
+
+/* ---- Playback HUD sparklines ---- */
+.pb-spark {
+  width: 100%;
+  height: 30px;
+  display: block;
+  margin: 0.15rem 0;
+}

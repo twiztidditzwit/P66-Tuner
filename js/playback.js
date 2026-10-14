@@ -129,24 +129,152 @@
   }
 
   /**
-   * Render the playback HUD into container. Re-rendering stops any previous
-   * playback loop attached to the same container.
+   * Playback controller: time-based engine other views (strip charts, event
+   * ticks, sparklines) can synchronize with. Owns the rAF loop and notifies
+   * subscribers with the current row index on every painted frame.
+   *
+   *   var ctl = P66.createPlaybackController(parsedLog, mapResult);
+   *   ctl.onFrame(function (idx, ctl) { ... });
+   *   ctl.seek(120); ctl.play(); ctl.pause(); ctl.toggle();
+   *   ctl.setSpeed(2); ctl.getIndex(); ctl.getState(); ctl.stop();
+   *   ctl.valueAt(gaugeIdx, rowIdx); // display number or NaN
+   *
+   * Returns null when there are no rows.
    */
-  function renderPlayback(container, parsedLog, mapResult) {
-    if (typeof document === 'undefined') return;
-    if (container._pbStop) { container._pbStop(); container._pbStop = null; }
-    container.innerHTML = '';
-
+  function createPlaybackController(parsedLog, mapResult) {
     var rows = (parsedLog && parsedLog.rows) || [];
-    if (!rows.length) {
-      container.innerHTML = '<p class="muted">Load a log to play it back.</p>';
-      return;
-    }
+    if (!rows.length) return null;
 
     var timeCol = P66.columnFor ? P66.columnFor(mapResult, 'TIME') : null;
     var tb = pbBuildTimes(rows, timeCol);
     var times = tb.times;
     var cols = pbResolveColumns(mapResult);
+    var listeners = [];
+    var state = {
+      playing: false,
+      speed: 1,
+      cur: times[0],
+      index: 0,
+      raf: 0,
+      lastWall: 0
+    };
+    var tMin = times[0], tMax = times[times.length - 1];
+
+    function emit() {
+      for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i](state.index, api); } catch (e) { /* keep loop alive */ }
+      }
+    }
+
+    function setIndex(idx) {
+      idx = Math.max(0, Math.min(rows.length - 1, idx | 0));
+      state.index = idx;
+      state.cur = times[idx];
+      emit();
+    }
+
+    function rafFn(fn) {
+      if (typeof requestAnimationFrame !== 'undefined') return requestAnimationFrame(fn);
+      return setTimeout(function () { fn(Date.now()); }, 50);
+    }
+    function cafFn(id) {
+      if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(id);
+      else clearTimeout(id);
+    }
+
+    function tick(wall) {
+      if (!state.playing) return;
+      var dt = (wall - state.lastWall) / 1000 * state.speed;
+      state.lastWall = wall;
+      state.cur += dt;
+      if (state.cur >= tMax) {
+        state.cur = tMax;
+        state.index = rows.length - 1;
+        setPlaying(false);
+        emit();
+        return;
+      }
+      var idx = pbRowIndexAt(times, state.cur);
+      if (idx !== state.index) {
+        state.index = idx;
+        emit();
+      }
+      if (state.playing) state.raf = rafFn(tick);
+    }
+
+    function setPlaying(on) {
+      state.playing = on;
+      if (on) {
+        state.lastWall = (typeof performance !== 'undefined' && performance.now)
+          ? performance.now() : Date.now();
+        state.raf = rafFn(tick);
+      } else if (state.raf) {
+        cafFn(state.raf);
+        state.raf = 0;
+      }
+      emit();
+    }
+
+    var api = {
+      rows: rows,
+      times: times,
+      indexed: tb.indexed,
+      tMin: tMin,
+      tMax: tMax,
+      gauges: HUD_GAUGES,
+      getIndex: function () { return state.index; },
+      getState: function () { return { playing: state.playing, speed: state.speed, cur: state.cur }; },
+      onFrame: function (fn) {
+        listeners.push(fn);
+        return function () {
+          var i = listeners.indexOf(fn);
+          if (i >= 0) listeners.splice(i, 1);
+        };
+      },
+      seek: setIndex,
+      play: function () {
+        if (state.cur >= tMax) { state.index = 0; state.cur = tMin; }
+        setPlaying(true);
+      },
+      pause: function () { setPlaying(false); },
+      toggle: function () {
+        if (state.playing) setPlaying(false);
+        else {
+          if (state.cur >= tMax) { state.index = 0; state.cur = tMin; }
+          setPlaying(true);
+        }
+      },
+      setSpeed: function (s) { state.speed = s; emit(); },
+      valueAt: function (gi, idx) {
+        var g = HUD_GAUGES[gi];
+        var col = cols[gi];
+        if (!g || !col || !rows[idx]) return NaN;
+        var raw = rows[idx][col];
+        var num = (typeof raw === 'number') ? raw : parseFloat(raw);
+        if (g.toAfr) num = pbToAfr(num);
+        return num;
+      },
+      stop: function () { setPlaying(false); listeners.length = 0; }
+    };
+    return api;
+  }
+
+  /**
+   * Render the playback HUD into container. Re-rendering stops any previous
+   * playback loop attached to the same container. Returns the playback
+   * controller so other views can synchronize with it.
+   */
+  function renderPlayback(container, parsedLog, mapResult) {
+    if (typeof document === 'undefined') return null;
+    if (container._pbStop) { container._pbStop(); container._pbStop = null; }
+    container.innerHTML = '';
+
+    var ctl = createPlaybackController(parsedLog, mapResult);
+    if (!ctl) {
+      container.innerHTML = '<p class="muted">Load a log to play it back.</p>';
+      return null;
+    }
+    var rows = ctl.rows;
 
     // ---- transport bar ----
     var bar = document.createElement('div');
@@ -165,7 +293,8 @@
     // ---- gauge grid ----
     var grid = document.createElement('div');
     grid.className = 'pb-grid';
-    var valEls = HUD_GAUGES.map(function (g, gi) {
+    var sparkEls = [];
+    var valEls = ctl.gauges.map(function (g) {
       var tile = document.createElement('div');
       tile.className = 'pb-tile';
       tile.style.borderColor = g.border;
@@ -177,78 +306,54 @@
       val.className = 'pb-value';
       val.style.color = g.color;
       val.textContent = '—';
+      var spark = document.createElement('canvas');
+      spark.className = 'pb-spark';
+      spark.width = 160;
+      spark.height = 30;
+      spark.setAttribute('aria-hidden', 'true');
       var unit = document.createElement('div');
       unit.className = 'pb-unit';
       unit.textContent = g.unit;
       tile.appendChild(lab);
       tile.appendChild(val);
+      tile.appendChild(spark);
       tile.appendChild(unit);
       grid.appendChild(tile);
+      sparkEls.push(spark);
       return val;
     });
     container.appendChild(grid);
 
-    // ---- state ----
+    // ---- playback wiring ----
     var speeds = [0.25, 0.5, 1, 2, 4];
-    var state = {
-      playing: false,
-      speed: 1,
-      cur: times[0],
-      raf: 0,
-      lastWall: 0
-    };
-    var tMin = times[0], tMax = times[times.length - 1];
 
     function paint(idx) {
-      var row = rows[idx];
-      for (var gi = 0; gi < HUD_GAUGES.length; gi++) {
-        var g = HUD_GAUGES[gi];
-        var col = cols[gi];
-        var raw = col ? row[col] : null;
-        var num = (typeof raw === 'number') ? raw : parseFloat(raw);
-        if (g.toAfr) num = pbToAfr(num);
+      for (var gi = 0; gi < ctl.gauges.length; gi++) {
+        var g = ctl.gauges[gi];
+        var num = ctl.valueAt(gi, idx);
         valEls[gi].textContent = pbFmt(num, g.decimals);
         valEls[gi].style.color = pbValueColor(g, num);
+        if (P66.drawSparkline && P66.sparklineWindow) {
+          P66.drawSparkline(sparkEls[gi],
+            P66.sparklineWindow(ctl, gi, 120), { color: g.border });
+        }
       }
       scrub.value = String(idx);
-      timeLabel.textContent = fmtClock(state.cur, tb.indexed) + ' / ' + fmtClock(tMax, tb.indexed);
+      var st = ctl.getState();
+      timeLabel.textContent = fmtClock(st.cur, ctl.indexed) + ' / ' + fmtClock(ctl.tMax, ctl.indexed);
     }
 
-    function tick(wall) {
-      if (!state.playing) return;
-      var dt = (wall - state.lastWall) / 1000 * state.speed;
-      state.lastWall = wall;
-      state.cur += dt;
-      if (state.cur >= tMax) {
-        state.cur = tMax;
-        setPlaying(false);
-      }
-      paint(pbRowIndexAt(times, state.cur));
-      if (state.playing) state.raf = requestAnimationFrame(tick);
-    }
-
-    function setPlaying(on) {
-      state.playing = on;
-      playBtn.textContent = on ? '⏸' : '▶';
-      playBtn.setAttribute('aria-label', on ? 'Pause' : 'Play');
-      if (on) {
-        state.lastWall = performance.now();
-        state.raf = requestAnimationFrame(tick);
-      } else if (state.raf) {
-        cancelAnimationFrame(state.raf);
-        state.raf = 0;
-      }
-    }
-
-    playBtn.addEventListener('click', function () {
-      if (!state.playing && state.cur >= tMax) state.cur = tMin; // replay from start
-      setPlaying(!state.playing);
+    ctl.onFrame(function (idx, c) {
+      paint(idx);
+      var playing = c.getState().playing;
+      playBtn.textContent = playing ? '⏸' : '▶';
+      playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     });
 
+    playBtn.addEventListener('click', function () { ctl.toggle(); });
+
     scrub.addEventListener('input', function () {
-      var idx = Math.max(0, Math.min(rows.length - 1, parseInt(scrub.value, 10) || 0));
-      state.cur = times[idx];
-      paint(idx);
+      ctl.seek(parseInt(scrub.value, 10) || 0);
     });
 
     speeds.forEach(function (s) {
@@ -258,7 +363,7 @@
       b.textContent = (s < 1 ? s : s + 'x');
       if (s === 1) b.textContent = '1x';
       b.addEventListener('click', function () {
-        state.speed = s;
+        ctl.setSpeed(s);
         var btns = speedBox.querySelectorAll('.pb-speed-btn');
         for (var i = 0; i < btns.length; i++) btns[i].classList.remove('active');
         b.classList.add('active');
@@ -266,11 +371,10 @@
       speedBox.appendChild(b);
     });
 
-    paint(0);
+    paint(ctl.getIndex());
 
-    container._pbStop = function () {
-      setPlaying(false);
-    };
+    container._pbStop = function () { ctl.stop(); };
+    return ctl;
   }
 
   P66.HUD_GAUGES = HUD_GAUGES;
@@ -280,5 +384,6 @@
   P66.pbRowIndexAt = pbRowIndexAt;
   P66.pbValueColor = pbValueColor;
   P66.pbResolveColumns = pbResolveColumns;
+  P66.createPlaybackController = createPlaybackController;
   P66.renderPlayback = renderPlayback;
 })(typeof window !== 'undefined' ? window : global);

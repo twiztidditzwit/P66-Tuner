@@ -91,6 +91,10 @@
           state.log = null;
         } else {
           state.log = { name: file.name, parsed: parsed, mapResult: mapResult };
+          if (P66.setVePointsSource) {
+            try { P66.setVePointsSource({ parsedLog: parsed, mapResult: mapResult }); }
+            catch (e) { /* 3D view not rendered — toggle stays disabled */ }
+          }
           var sigs = foundSignals(mapResult);
           info.innerHTML = '<p class="status-ok"><strong>' + esc(file.name) + '</strong> — ' +
             parsed.rows.length.toLocaleString('en-US') + ' rows.</p>' +

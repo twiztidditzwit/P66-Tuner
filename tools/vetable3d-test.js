@@ -109,5 +109,88 @@ var mEmpty = P66.veSurfaceModel(P66.veComparisonData(catalog, bin, []), 'change'
 check('change: all flat when no patches',
   mEmpty.nodes.every(function (row) { return row.every(function (nd) { return nd.h === 0; }); }));
 
+console.log('vepoints: stride sampling');
+function fakeRows(n, fn) {
+  var rows = [];
+  for (var i = 0; i < n; i++) rows.push(fn(i));
+  return rows;
+}
+var big = fakeRows(10000, function (i) { return { RPM: 800 + i, MAP: 30 + (i % 70) }; });
+var s2000 = P66.vePointsSample(big, 'RPM', 'MAP', 2000);
+check('10k rows -> 2000 points', s2000.length === 2000);
+check('first point from row 0', s2000[0].rpm === 800 && s2000[0].map === 30);
+check('even stride of 5 across the log', s2000[1].rpm === 805 && s2000[1999].rpm === 800 + 9995);
+check('not just the first rows', s2000[1999].rpm > 800 + 1999, 'last=' + s2000[1999].rpm);
+
+var few = fakeRows(50, function (i) { return { RPM: 1000 + i, MAP: 40 }; });
+check('short log keeps every row', P66.vePointsSample(few, 'RPM', 'MAP', 2000).length === 50);
+
+var gappy = fakeRows(9, function (i) {
+  return { RPM: i % 3 === 0 ? 'n/a' : 1000 + i, MAP: 50 };
+});
+var sg = P66.vePointsSample(gappy, 'RPM', 'MAP', 3);
+check('invalid rows dropped', sg.length === 3);
+check('stride still spans the whole log', sg[0].rpm === 1001 && sg[1].rpm === 1004 && sg[2].rpm === 1007,
+  JSON.stringify(sg.map(function (p) { return p.rpm; })));
+
+check('null column -> []', P66.vePointsSample(big, null, 'MAP', 2000).length === 0);
+check('empty rows -> []', P66.vePointsSample([], 'RPM', 'MAP', 2000).length === 0);
+check('maxPoints 0 -> []', P66.vePointsSample(big, 'RPM', 'MAP', 0).length === 0);
+check('default max is VE_POINTS_MAX', P66.vePointsSample(big, 'RPM', 'MAP').length === P66.VE_POINTS_MAX);
+
+console.log('vepoints: range filtering');
+var rpts = [{ rpm: 800, map: 30 }, { rpm: 400, map: 20 }, { rpm: 5000, map: 30 }, { rpm: 900, map: 105 }];
+var kept = P66.vePointsInRange(rpts, [400, 800, 1200], [20, 60, 100]);
+check('in-range kept (bounds inclusive), out-of-range dropped',
+  kept.length === 2 && kept[0].rpm === 800 && kept[1].rpm === 400);
+check('descending breakpoints handled',
+  P66.vePointsInRange(rpts, [1200, 800, 400], [100, 60, 20]).length === 2);
+check('missing breakpoints -> []', P66.vePointsInRange(rpts, [], [20, 60]).length === 0);
+check('empty points -> []', P66.vePointsInRange([], [400, 800], [20, 60]).length === 0);
+
+console.log('vepoints: axis fraction');
+check('midpoint interpolates', approx(P66.veAxisFrac([0, 100, 200], 150), 1.5));
+check('exact endpoints',
+  P66.veAxisFrac([0, 100, 200], 0) === 0 && P66.veAxisFrac([0, 100, 200], 200) === 2);
+check('out of range -> null', P66.veAxisFrac([0, 100, 200], 250) === null);
+check('descending axis', approx(P66.veAxisFrac([200, 100, 0], 150), 0.5));
+check('too few breakpoints -> null', P66.veAxisFrac([100], 100) === null);
+
+console.log('vepoints: model mapping');
+var synData = { rows: 2, cols: 2, rpmBp: [400, 800], mapBp: [20, 100] };
+var synModel = {
+  nodes: [
+    [{ h: 0, rgb: [0, 0, 0] }, { h: 1, rgb: [0, 0, 0] }],
+    [{ h: 2, rgb: [0, 0, 0] }, { h: 3, rgb: [0, 0, 0] }]
+  ],
+  rows: 2, cols: 2
+};
+var pmid = P66.vePointModel({ rpm: 600, map: 60 }, synModel, synData, 10);
+check('cell center interpolates height', pmid !== null && approx(pmid.y, 15), 'y=' + (pmid && pmid.y));
+check('cell center coords', pmid !== null && approx(pmid.x, 0) && approx(pmid.z, 0));
+var p00 = P66.vePointModel({ rpm: 400, map: 20 }, synModel, synData, 10);
+check('corner hits node', p00 !== null && approx(p00.y, 0) && approx(p00.x, -0.5) && approx(p00.z, -0.5));
+check('out of range -> null', P66.vePointModel({ rpm: 900, map: 60 }, synModel, synData, 10) === null);
+
+console.log('vepoints: source setter');
+P66.setVePointsSource(null);
+check('no source -> resolve null', P66._vePointsResolve(data) === null);
+P66.setVePointsSource({ parsedLog: { rows: big }, mapResult: P66.mapChannels(['RPM', 'MAP']) });
+var res = P66._vePointsResolve(data);
+check('setter resolves sampled points',
+  res !== null && res.rpmCol === 'RPM' && res.mapCol === 'MAP' &&
+  res.points.length > 0 && res.points.length <= P66.VE_POINTS_MAX,
+  'n=' + (res && res.points.length));
+check('resolved points are plain {rpm,map}',
+  res !== null && res.points.every(function (p) { return typeof p.rpm === 'number' && typeof p.map === 'number'; }));
+check('resolved points all inside Main VE axis range',
+  res !== null && res.points.every(function (p) {
+    return p.rpm >= 0 && p.rpm <= 6400 && p.map >= 15 && p.map <= 100;
+  }));
+P66.setVePointsSource({ parsedLog: { rows: big }, mapResult: P66.mapChannels(['TPS', 'ECT']) });
+check('missing RPM/MAP mapping -> resolve null', P66._vePointsResolve(data) === null);
+P66.setVePointsSource(null);
+check('clearing source -> resolve null', P66._vePointsResolve(data) === null);
+
 console.log('\n' + checks + ' checks, ' + failures + ' failures');
 process.exit(failures ? 1 : 0);
