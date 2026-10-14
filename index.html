@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>P66 Log Analyzer</title>
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles/stripcharts.css" />
+    <link rel="stylesheet" href="styles/playback-events.css" />
+    <link rel="stylesheet" href="styles/compare.css" />
+    <link rel="stylesheet" href="styles/o2health.css" />
+    <link rel="stylesheet" href="styles/report.css" />
+    <link rel="stylesheet" href="styles/segments.css" />
+    <link rel="stylesheet" href="styles/vepoints.css" />
   </head>
   <body>
     <div class="bg-video-wrap" aria-hidden="true">
@@ -144,6 +151,37 @@
         <h2>Log Playback</h2>
         <p class="muted">TunerPro-style dashboard — play the log back and watch every gauge live.</p>
         <div id="playback-hud"><p class="muted">Load a log to play it back.</p></div>
+        <div id="event-ticks"></div>
+        <div id="stripcharts"></div>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>Drive Segments</h2>
+        <p class="muted">Where your log time went — idle, cruise, WOT, decel — and the average trim in each.</p>
+        <div id="segments"><p class="muted">Load a log to see the breakdown.</p></div>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>O2 Sensor Health</h2>
+        <p class="muted">Narrowband crosscounts and switch strength per bank — lazy sensors lie to the PCM.</p>
+        <div id="o2health"><p class="muted">Load a log to check sensor health.</p></div>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>Log Compare</h2>
+        <p class="muted">Before vs after — load a second log to see what your tune changed, cell by cell.</p>
+        <label class="dropzone" for="compare-log-input">
+          <span>Drop a second TunerPro log here to compare</span>
+          <small>.csv / .tsv</small>
+          <input id="compare-log-input" type="file" accept=".csv,.tsv,.txt" />
+        </label>
+        <div id="log-compare"><p class="muted">Load your main log, then a second log to compare.</p></div>
+      </section>
+
+      <section class="card grid-span-2">
+        <h2>Report Card</h2>
+        <p class="muted">One clean summary of the log — screenshot it or download the PNG for the group.</p>
+        <div id="reportcard"><p class="muted">Load a log to build the report card.</p></div>
       </section>
 
       <section class="card grid-span-2">
@@ -240,6 +278,13 @@
     <script src="js/journal.js"></script>
     <script src="js/altitude.js"></script>
     <script src="js/playback.js"></script>
+    <script src="js/stripcharts.js"></script>
+    <script src="js/playback-events.js"></script>
+    <script src="js/sparklines.js"></script>
+    <script src="js/compare.js"></script>
+    <script src="js/o2health.js"></script>
+    <script src="js/report.js"></script>
+    <script src="js/segments.js"></script>
     <script src="js/bundled-catalog.js"></script>
     <script src="js/easy.js"></script>
     <script src="app.js"></script>

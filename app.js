@@ -489,6 +489,91 @@
   var files = { xdf: null, ads: null, bin: null, log: null };
   var parsedLog = null;
   var mapResult = null;
+  var playbackCtl = null;
+  var compareLog = null;
+  var compareMap = null;
+
+  /**
+   * Render one view into a container, isolating failures so one broken
+   * view can't take down the rest of the page.
+   */
+  function safeRender(id, fn) {
+    var el = document.getElementById(id);
+    if (!el || typeof fn !== 'function') return;
+    try { fn(el); }
+    catch (err) {
+      el.innerHTML = '<p class="muted">View unavailable: ' +
+        String(err && err.message ? err.message : err) + '</p>';
+    }
+  }
+
+  function placeholder(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = '<p class="muted">' + text + '</p>';
+  }
+
+  /**
+   * Render every log-driven view that isn't part of the analysis run:
+   * synchronized playback views plus the standalone log panels.
+   */
+  function renderLogViews() {
+    if (!parsedLog || !mapResult) return;
+    safeRender('event-ticks', function (el) {
+      if (P66.renderEventTicks && P66.computePlaybackEvents && playbackCtl) {
+        P66.renderEventTicks(el, playbackCtl, P66.computePlaybackEvents(parsedLog, mapResult));
+      }
+    });
+    safeRender('stripcharts', function (el) {
+      if (P66.renderStripCharts && playbackCtl) {
+        P66.renderStripCharts(el, playbackCtl, { mapResult: mapResult });
+      }
+    });
+    safeRender('segments', function (el) {
+      if (P66.renderSegments && P66.analyzeSegments) {
+        P66.renderSegments(el, P66.analyzeSegments(parsedLog.rows, mapResult));
+      }
+    });
+    safeRender('o2health', function (el) {
+      if (P66.renderO2Health && P66.analyzeO2Health) {
+        P66.renderO2Health(el, P66.analyzeO2Health(parsedLog.rows, mapResult));
+      }
+    });
+    safeRender('reportcard', function (el) {
+      if (P66.renderReportCard && P66.buildReportData) {
+        P66.renderReportCard(el, P66.buildReportData(parsedLog, mapResult));
+      }
+    });
+    if (P66.setVePointsSource) {
+      try { P66.setVePointsSource({ parsedLog: parsedLog, mapResult: mapResult }); }
+      catch (err) { /* 3D view not rendered yet — toggle stays disabled */ }
+    }
+    renderCompareView();
+  }
+
+  function renderCompareView() {
+    safeRender('log-compare', function (el) {
+      if (!P66.renderCompare || !P66.compareLogs) return;
+      P66.renderCompare(el, P66.compareLogs(
+        { parsedLog: parsedLog, mapResult: mapResult }, null,
+        compareLog ? { parsedLog: compareLog, mapResult: compareMap } : null, null));
+    });
+  }
+
+  function clearLogViews() {
+    placeholder('event-ticks', '');
+    placeholder('stripcharts', '');
+    placeholder('segments', 'Load a log to see the breakdown.');
+    placeholder('o2health', 'Load a log to check sensor health.');
+    placeholder('log-compare', 'Load your main log, then a second log to compare.');
+    placeholder('reportcard', 'Load a log to build the report card.');
+    if (P66.setVePointsSource) {
+      try { P66.setVePointsSource(null); } catch (err) { /* ignore */ }
+    }
+    compareLog = null;
+    compareMap = null;
+    var cmp = document.getElementById('compare-log-input');
+    if (cmp) cmp.value = '';
+  }
   var sessionReport = null;
   var sessionHistory = []; // past reports for before/after comparison
   var xdfCatalog = null;
@@ -579,8 +664,24 @@
     });
   }
 
-  Object.entries(fileInputs).forEach(function (entry) {
-    var key = entry[0], input = entry[1];
+  // Second log for the before/after compare view.
+  var compareInput = document.getElementById('compare-log-input');
+  if (compareInput) {
+    compareInput.addEventListener('change', function () {
+      var f = compareInput.files[0];
+      if (!f || !parsedLog) return;
+      readLogFile(f).then(function (text) {
+        compareLog = P66.parseLogText(text);
+        compareMap = P66.mapChannels(compareLog.headers);
+        renderCompareView();
+        writeConsole('Compare log parsed: ' + compareLog.rowCount + ' rows.');
+      }).catch(function (err) {
+        writeConsole('Failed to read compare log: ' + err);
+      });
+    });
+  }
+
+  Object.entries(fileInputs).forEach(function (entry) {    var key = entry[0], input = entry[1];
     input.addEventListener('change', function () {
       files[key] = input.files[0] || null;
       if (key === 'log' && files.log) {
@@ -593,7 +694,8 @@
           resetDashboardPlaceholders();
           refreshSummary();
           renderMappingPreview();
-          P66.renderPlayback(document.getElementById('playback-hud'), parsedLog, mapResult);
+          playbackCtl = P66.renderPlayback(document.getElementById('playback-hud'), parsedLog, mapResult);
+          renderLogViews();
           writeConsole('LOG parsed: ' + parsedLog.rowCount + ' rows, ' +
             parsedLog.columnCount + ' columns (delimiter: ' +
             (parsedLog.delimiter === '\t' ? 'TAB' : parsedLog.delimiter) + ').');
@@ -628,7 +730,8 @@
           writeConsole('Failed to read BIN file: ' + err);
         });
       } else {
-        if (key === 'log') { parsedLog = null; mapResult = null; sessionReport = null;
+        if (key === 'log') { parsedLog = null; mapResult = null; sessionReport = null; playbackCtl = null;
+          clearLogViews();
           var pbHud = document.getElementById('playback-hud');
           if (pbHud && pbHud._pbStop) pbHud._pbStop();
           if (pbHud) pbHud.innerHTML = '<p class="muted">Load a log to play it back.</p>'; }
