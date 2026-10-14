@@ -577,6 +577,148 @@
   var sessionReport = null;
   var sessionHistory = []; // past reports for before/after comparison
   var xdfCatalog = null;
+  var xdfSourceLabel = null;   // human-readable active XDF source for the summary
+  var pendingXdf = null;       // last successfully parsed dropped XDF {name, text}
+
+  /**
+   * XDF library (IndexedDB): the user's own definition shelf.
+   */
+  function xdfLib() {
+    return (typeof P66 !== 'undefined' && P66.xdfLibrary) ? P66.xdfLibrary : null;
+  }
+
+  function fmtKb(n) {
+    return (n / 1024).toFixed(0) + ' KB';
+  }
+
+  function refreshXdfLibrary(selectId) {
+    var lib = xdfLib();
+    var sel = document.getElementById('xdf-library-select');
+    var info = document.getElementById('xdf-library-info');
+    if (!lib || !sel) return Promise.resolve();
+    return lib.list().then(function (recs) {
+      var cur = sel.value;
+      sel.innerHTML = '<option value="">Use dropped file…</option>';
+      recs.forEach(function (r) {
+        var opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = r.name + ' (' + fmtKb(r.size) + ')';
+        sel.appendChild(opt);
+      });
+      if (selectId && recs.some(function (r) { return r.id === selectId; })) {
+        sel.value = selectId;
+      } else if (cur && recs.some(function (r) { return r.id === cur; })) {
+        sel.value = cur;
+      }
+      updateXdfDeleteBtn();
+      if (info && !recs.length) {
+        info.textContent = 'Drop your XDFs once — they stay in this browser.';
+      }
+    }).catch(function (err) {
+      if (info) info.textContent = 'Library unavailable: ' + (err && err.message ? err.message : err);
+    });
+  }
+
+  function updateXdfDeleteBtn() {
+    var sel = document.getElementById('xdf-library-select');
+    var btn = document.getElementById('xdf-delete-btn');
+    if (btn) btn.disabled = !(sel && sel.value);
+  }
+
+  function useXdfRecord(rec) {
+    var lib = xdfLib();
+    try {
+      xdfCatalog = P66.parseXdfXml(rec.xml);
+      xdfSourceLabel = 'library: ' + rec.name;
+      if (lib) lib.setLastUsed(rec.id).catch(function () {});
+      writeConsole('XDF loaded from library: ' + rec.name + ' — ' +
+        xdfCatalog.tables.length + ' tables, ' + xdfCatalog.constants.length + ' constants.');
+    } catch (err) {
+      xdfCatalog = null;
+      xdfSourceLabel = null;
+      writeConsole('Library XDF parse failed (' + rec.name + '): ' +
+        (err && err.message ? err.message : err));
+    }
+    refreshSummary();
+  }
+
+  function initXdfLibrary() {
+    var lib = xdfLib();
+    var sel = document.getElementById('xdf-library-select');
+    var saveBtn = document.getElementById('xdf-save-btn');
+    var delBtn = document.getElementById('xdf-delete-btn');
+    var info = document.getElementById('xdf-library-info');
+    if (!lib || !sel) return;
+
+    refreshXdfLibrary().then(function () {
+      // Restore the last-used library XDF, if it still exists.
+      return lib.getLastUsed().then(function (id) {
+        if (!id) return;
+        return lib.get(id).then(function (rec) {
+          if (rec) {
+            sel.value = id;
+            updateXdfDeleteBtn();
+            useXdfRecord(rec);
+          }
+        });
+      });
+    }).catch(function () { /* library optional — dropzone still works */ });
+
+    sel.addEventListener('change', function () {
+      updateXdfDeleteBtn();
+      var id = sel.value;
+      if (!id) {
+        if (info) info.textContent = 'Using the dropped file (or nothing).';
+        return;
+      }
+      lib.get(id).then(function (rec) {
+        if (rec) {
+          useXdfRecord(rec);
+          if (info) info.textContent = 'Active: ' + rec.name + ' — ' +
+            new Date(rec.addedAt).toLocaleDateString() + ' added.';
+        } else {
+          refreshXdfLibrary();
+        }
+      });
+    });
+
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        if (!pendingXdf) return;
+        saveBtn.disabled = true;
+        lib.save(pendingXdf.name, pendingXdf.text).then(function (rec) {
+          writeConsole('XDF saved to library: ' + rec.name);
+          return refreshXdfLibrary(rec.id).then(function () {
+            sel.value = rec.id;
+            updateXdfDeleteBtn();
+            useXdfRecord(rec);
+            if (info) info.textContent = 'Saved: ' + rec.name + '.';
+          });
+        }).catch(function (err) {
+          if (info) info.textContent = 'Save failed: ' + (err && err.message ? err.message : err);
+        }).then(function () { saveBtn.disabled = false; });
+      });
+    }
+
+    if (delBtn) {
+      delBtn.addEventListener('click', function () {
+        var id = sel.value;
+        if (!id) return;
+        lib.remove(id).then(function () {
+          return lib.getLastUsed().then(function (last) {
+            if (last === id) return lib.setLastUsed(null);
+          });
+        }).then(function () {
+          xdfCatalog = null;
+          xdfSourceLabel = null;
+          writeConsole('XDF removed from library.');
+          refreshXdfLibrary();
+          refreshSummary();
+          if (info) info.textContent = 'Removed. Drop a file or pick another XDF.';
+        });
+      });
+    }
+  }
   var binBytes = null;
   var lastPatches = null;
 
@@ -608,7 +750,7 @@
   function refreshSummary() {
     fileSummary.innerHTML =
       '<ul>' +
-      '<li><strong>XDF:</strong> ' + fileLabel(files.xdf) +
+      '<li><strong>XDF:</strong> ' + (xdfSourceLabel ? esc(xdfSourceLabel) : fileLabel(files.xdf)) +
       (xdfCatalog ? ' — ' + xdfCatalog.tables.length + ' tables parsed' : '') + '</li>' +
       '<li><strong>ADS:</strong> ' + fileLabel(files.ads) + '</li>' +
       '<li><strong>BIN:</strong> ' + fileLabel(files.bin) +
@@ -681,6 +823,8 @@
     });
   }
 
+  initXdfLibrary();
+
   Object.entries(fileInputs).forEach(function (entry) {    var key = entry[0], input = entry[1];
     input.addEventListener('change', function () {
       files[key] = input.files[0] || null;
@@ -710,10 +854,19 @@
         readLogFile(files.xdf).then(function (text) {
           try {
             xdfCatalog = P66.parseXdfXml(text);
+            xdfSourceLabel = 'dropped file: ' + files.xdf.name;
+            pendingXdf = { name: files.xdf.name, text: text };
+            var saveBtn = document.getElementById('xdf-save-btn');
+            if (saveBtn) saveBtn.disabled = false;
+            // A fresh drop takes precedence over the library selection.
+            var sel = document.getElementById('xdf-library-select');
+            if (sel) sel.value = '';
+            if (P66.xdfLibrary) P66.xdfLibrary.setLastUsed(null).catch(function () {});
             writeConsole('XDF parsed: ' + xdfCatalog.deftitle + ' — ' +
               xdfCatalog.tables.length + ' tables, ' + xdfCatalog.constants.length + ' constants.');
           } catch (err) {
             xdfCatalog = null;
+            pendingXdf = null;
             writeConsole('XDF parse failed: ' + (err && err.message ? err.message : err));
           }
           refreshSummary();
@@ -735,7 +888,9 @@
           var pbHud = document.getElementById('playback-hud');
           if (pbHud && pbHud._pbStop) pbHud._pbStop();
           if (pbHud) pbHud.innerHTML = '<p class="muted">Load a log to play it back.</p>'; }
-        if (key === 'xdf') { xdfCatalog = null; }
+        if (key === 'xdf') { xdfCatalog = null; xdfSourceLabel = null; pendingXdf = null;
+          var xSaveBtn = document.getElementById('xdf-save-btn');
+          if (xSaveBtn) xSaveBtn.disabled = true; }
         if (key === 'bin') { binBytes = null; lastPatches = null; }
         refreshSummary();
         renderMappingPreview();

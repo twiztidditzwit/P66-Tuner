@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="styles/report.css" />
     <link rel="stylesheet" href="styles/segments.css" />
     <link rel="stylesheet" href="styles/vepoints.css" />
+    <link rel="stylesheet" href="styles/xdf-library.css" />
   </head>
   <body>
     <div class="bg-video-wrap" aria-hidden="true">
@@ -93,6 +94,20 @@
             <small>.csv / .tsv</small>
             <input id="log-input" type="file" accept=".csv,.tsv,.txt" />
           </label>
+        </div>
+
+        <div class="xdf-library-row">
+          <label>
+            XDF Library
+            <select id="xdf-library-select">
+              <option value="">Use dropped file…</option>
+            </select>
+          </label>
+          <div class="xdf-library-actions">
+            <button type="button" id="xdf-save-btn" disabled>Save dropped XDF to library</button>
+            <button type="button" id="xdf-delete-btn" disabled>Remove selected</button>
+          </div>
+          <p class="muted" id="xdf-library-info">Drop your XDFs once — they stay in this browser.</p>
         </div>
 
         <div class="file-summary" id="file-summary">
@@ -285,6 +300,7 @@
     <script src="js/o2health.js"></script>
     <script src="js/report.js"></script>
     <script src="js/segments.js"></script>
+    <script src="js/xdf-library.js"></script>
     <script src="js/bundled-catalog.js"></script>
     <script src="js/easy.js"></script>
     <script src="app.js"></script>
