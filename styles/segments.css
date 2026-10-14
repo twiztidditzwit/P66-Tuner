@@ -1,0 +1,101 @@
+/* Drive-segment breakdown styles. Dark theme; uses the CSS vars from
+   styles.css. Segment block colors are muted grays/earth tones on purpose:
+   blue and red are reserved for the fuel-trim color convention (blue =
+   adding fuel/lean, red = removing fuel/rich), so segments must not reuse
+   them. */
+
+.seg-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Stacked horizontal share bar: one colored block per segment. */
+.seg-bar {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0b0e13;
+  border: 1px solid var(--card-border);
+}
+
+.seg-block {
+  height: 100%;
+  min-width: 0;
+  transition: width 0.25s ease;
+}
+
+.seg-idle   { background: #8b93a7; }
+.seg-cruise { background: #3fb27f; }
+.seg-wot    { background: #d29922; }
+.seg-decel  { background: #a371f7; }
+.seg-other  { background: #3d4451; }
+
+/* Legend chips. */
+.seg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.seg-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.seg-chip {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: none;
+}
+
+/* Per-segment detail rows. */
+.seg-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.seg-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.9rem;
+}
+
+.seg-label {
+  font-weight: 600;
+  min-width: 60px;
+}
+
+.seg-share {
+  font-weight: 600;
+  min-width: 56px;
+  text-align: right;
+}
+
+.seg-count {
+  color: var(--muted);
+  min-width: 110px;
+}
+
+.seg-trim {
+  color: var(--muted);
+  min-width: 92px;
+}
+
+/* Dash shown when a segment has no mapped trim channel for that bank. */
+.seg-trim-dash {
+  color: var(--muted);
+}

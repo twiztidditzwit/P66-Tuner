@@ -1,0 +1,99 @@
+/* P66 playback event ticks — compact tick strip under the HUD timeline.
+ *
+ * One row (~28px) spanning the log's time range. Ticks are color-coded by
+ * event type: knock = red, tip-in = orange, PE = green. The tick nearest
+ * at/below the current playback frame highlights while the log plays.
+ */
+
+.p66-event-ticks {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.p66-events-legend {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 3px;
+  color: #9aa4b2;
+  user-select: none;
+}
+
+.p66-events-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.p66-events-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.p66-events-chip.ev-knock .p66-events-dot { background: #ff5a5a; }
+.p66-events-chip.ev-tipin .p66-events-dot { background: #ff9f43; }
+.p66-events-chip.ev-pe .p66-events-dot { background: #3fb950; }
+
+.p66-events-strip {
+  position: relative;
+  height: 28px;
+  background: #161b24;
+  border: 1px solid #2a2f3a;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* baseline hairline the ticks stand on */
+.p66-events-strip::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: #2a2f3a;
+}
+
+.p66-event-tick {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 5px;
+  margin-left: -2.5px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.p66-event-tick.ev-knock { background: #ff5a5a; }
+.p66-event-tick.ev-tipin { background: #ff9f43; }
+.p66-event-tick.ev-pe { background: #3fb950; }
+
+.p66-event-tick:hover {
+  opacity: 1;
+  transform: scaleX(1.6);
+}
+
+.p66-event-tick.active {
+  opacity: 1;
+  transform: scaleX(1.8);
+  box-shadow: 0 0 6px 1px currentColor;
+  z-index: 2;
+}
+
+.p66-event-tick.ev-knock.active { color: #ff5a5a; }
+.p66-event-tick.ev-tipin.active { color: #ff9f43; }
+.p66-event-tick.ev-pe.active { color: #3fb950; }
+
+.p66-events-empty {
+  padding: 10px 12px;
+  color: #9aa4b2;
+  background: #161b24;
+  border: 1px solid #2a2f3a;
+  border-radius: 4px;
+  font-size: 12px;
+}

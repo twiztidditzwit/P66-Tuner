@@ -1,0 +1,99 @@
+/* P66 strip charts — TunerPro history-table style multi-lane chart.
+ * Dark theme. Falls back to hard-coded palette when styles.css variables
+ * are unavailable. Loaded alongside js/stripcharts.js only.
+ */
+.sc-wrap {
+  background: var(--card, #171b22);
+  border: 1px solid var(--card-border, #2b3340);
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+  color: var(--text, #e6e9ef);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.sc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+.sc-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.sc-range {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.sc-lanes {
+  position: relative;
+}
+.sc-lane {
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid rgba(159, 169, 184, 0.12);
+}
+.sc-lane:first-child {
+  border-top: none;
+}
+.sc-lab {
+  flex: 0 0 132px;
+  width: 132px;
+  min-width: 132px;
+  padding: 6px 10px 6px 0;
+  overflow: hidden;
+}
+.sc-lab-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-lab-val {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.sc-lab-unit {
+  font-size: 10px;
+  line-height: 1.2;
+}
+.sc-plot {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+}
+.sc-canvas {
+  display: block;
+  width: 100%;
+  cursor: crosshair;
+  touch-action: none; /* let pointer drag seek instead of scrolling */
+}
+.sc-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  z-index: 2;
+}
+.sc-axisrow {
+  border-top: 1px solid rgba(159, 169, 184, 0.12);
+}
+.sc-axis-cv {
+  display: block;
+  width: 100%;
+}
+@media (max-width: 560px) {
+  .sc-lab {
+    flex-basis: 92px;
+    width: 92px;
+    min-width: 92px;
+  }
+}

@@ -1,0 +1,75 @@
+/* O2 sensor health panel */
+.o2h-panel {
+  margin: 12px 0;
+}
+
+.o2h-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.o2h-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.o2h-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.o2h-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--muted);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.o2h-card.o2h-ok { border-left-color: var(--ok); }
+.o2h-card.o2h-lazy { border-left-color: var(--bad); }
+
+.o2h-bank {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.o2h-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.o2h-label { color: var(--muted); }
+.o2h-value { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* Fuel-trim color convention: blue = lean / adding fuel, red = rich / removing fuel.
+   The high excursion is the rich side, the low excursion the lean side. */
+.o2h-value.o2h-rich { color: var(--bad); }
+.o2h-value.o2h-lean { color: var(--accent); }
+
+.o2h-verdict {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--card-border);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.o2h-card.o2h-lazy .o2h-verdict { color: var(--bad); }
+.o2h-card.o2h-ok .o2h-verdict { color: var(--ok); }
+
+.o2h-reason {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}

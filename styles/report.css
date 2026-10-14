@@ -1,0 +1,78 @@
+/* P66-Tuner shareable report card styles.
+ * Dark, screenshot-friendly card at a fixed 800px width. Trim verdict
+ * colors follow the app convention: blue = adding fuel (lean),
+ * red = removing fuel (rich).
+ */
+
+.p66-report-card {
+  width: 800px;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: #14171c;
+  color: #eef1f6;
+  border: 1px solid #2a2e35;
+  border-radius: 12px;
+  padding: 28px 32px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  border-left: 6px solid #2b6cb0;
+}
+
+.p66-rc-title {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.p66-rc-sub {
+  color: #9aa3b2;
+  font-size: 14px;
+  margin-bottom: 18px;
+}
+
+.p66-rc-row {
+  font-size: 17px;
+  padding: 10px 0;
+  border-top: 1px solid #23272e;
+  line-height: 1.45;
+}
+
+.p66-rc-label {
+  display: inline-block;
+  min-width: 110px;
+  color: #9aa3b2;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.p66-rc-val.trim-lean {
+  color: #6b9bff;
+  font-weight: 600;
+}
+
+.p66-rc-val.trim-rich {
+  color: #ff5a5a;
+  font-weight: 600;
+}
+
+.p66-rc-btn {
+  margin-top: 22px;
+  background: #2b6cb0;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 22px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.p66-rc-btn:hover {
+  background: #3578bd;
+}
+
+.p66-rc-btn:active {
+  background: #245a94;
+}

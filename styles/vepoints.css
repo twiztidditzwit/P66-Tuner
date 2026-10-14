@@ -1,0 +1,60 @@
+/* vepoints.css — Operating-points toggle + legend for the VE 3D view.
+ *
+ * Scoped to the VE comparison widget only, so nothing else in the app is
+ * affected. Loaded alongside styles.css:
+ *   <link rel="stylesheet" href="styles/vepoints.css" />
+ */
+
+/* Control row that holds the "Operating points" checkbox. Sits in the 3D
+ * view's control row under the Before/After/Change dataset toggle. */
+.ve-points-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.35rem 0;
+}
+
+/* Clickable label: checkbox + legend dot + caption. */
+.ve-points-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.9em;
+}
+
+.ve-points-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: #58a6ff;
+  cursor: pointer;
+}
+
+.ve-points-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+/* Legend dot: shows the dot color used for the scattered operating
+ * points on the surface (semi-transparent cyan-white). */
+.ve-points-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(170, 220, 255, 0.85);
+  box-shadow: 0 0 4px rgba(170, 220, 255, 0.6);
+  flex: none;
+}
+
+/* Dim the legend dot when the toggle is disabled (no log loaded). */
+.ve-points-label:has(input[type="checkbox"]:disabled) .ve-points-dot {
+  opacity: 0.35;
+  box-shadow: none;
+}
+
+/* Hint text: sample count when a log is available, or the
+ * "load a log to show operating points" message when not. */
+.ve-points-hint {
+  font-size: 0.85em;
+}
