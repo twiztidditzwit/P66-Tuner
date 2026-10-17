@@ -50,6 +50,7 @@
     regions: document.getElementById('region-chart'),
     knock: document.getElementById('knock-chart'),
     lambda: document.getElementById('lambda-chart'),
+    trans: document.getElementById('trans-report'),
     comparison: document.getElementById('comparison')
   };
 
@@ -730,6 +731,7 @@
       regions: 'Run analysis to render region breakdown.',
       knock: 'Run analysis to render knock events.',
       lambda: 'Run analysis to render the lambda trace.',
+      trans: 'Run analysis to render transmission data.',
       comparison: 'Run analysis on two sessions to compare before/after.'
     };
     Object.keys(dashParts).forEach(function (k) {
@@ -1181,10 +1183,14 @@
         var peEntryResult = (typeof P66.applyPeEntrySuggestions === 'function')
           ? P66.applyPeEntrySuggestions(xdfCatalog, peEntryBase, result.actionable)
           : { patches: [], patched: null, error: 'PE entry patcher not loaded (js/xdf-map.js).', warnings: [] };
-        var allPatches = (patchResult.patches || []).concat(sparkResult.patches || [], peResult.patches || [], aeResult.patches || [], peEntryResult.patches || []);
-        var finalImage = peEntryResult.patched || aeResult.patched || peResult.patched || sparkResult.patched || patchResult.patched;
-        var patchErrors = [patchResult.error, sparkResult.error, peResult.error, aeResult.error, peEntryResult.error].filter(function (e) { return !!e; });
-        var patchWarnings = (patchResult.warnings || []).concat(sparkResult.warnings || [], peResult.warnings || [], aeResult.warnings || [], peEntryResult.warnings || []);
+        var transBase = (peEntryResult.patched && !peEntryResult.error) ? peEntryResult.patched : peEntryBase;
+        var transResult = (typeof P66.applyTransSuggestions === 'function')
+          ? P66.applyTransSuggestions(xdfCatalog, transBase, result.actionable)
+          : { patches: [], patched: null, error: 'Trans patcher not loaded (js/xdf-map.js).', warnings: [] };
+        var allPatches = (patchResult.patches || []).concat(sparkResult.patches || [], peResult.patches || [], aeResult.patches || [], peEntryResult.patches || [], transResult.patches || []);
+        var finalImage = transResult.patched || peEntryResult.patched || aeResult.patched || peResult.patched || sparkResult.patched || patchResult.patched;
+        var patchErrors = [patchResult.error, sparkResult.error, peResult.error, aeResult.error, peEntryResult.error, transResult.error].filter(function (e) { return !!e; });
+        var patchWarnings = (patchResult.warnings || []).concat(sparkResult.warnings || [], peResult.warnings || [], aeResult.warnings || [], peEntryResult.warnings || [], transResult.warnings || []);
         if (allPatches.length === 0 && patchErrors.length) {
           html += '<p class="status-warn">Binary patching unavailable: ' + esc(patchErrors.join(' / ')) + '</p>';
         } else if (patchErrors.length) {

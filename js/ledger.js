@@ -31,7 +31,8 @@
   var LIMITS = {
     fuelPct: 15,   // |total fuel move| on one cell past this -> warn
     sparkDeg: 6,   // |total spark move| on one cell past this -> warn
-    pePct: 15
+    pePct: 15,
+    transPct: 20   // |total line-pressure / shift-schedule move| past this -> warn
   };
 
   function memoryStore() {
@@ -56,6 +57,10 @@
 
   function isSparkPatch(p) {
     return p.deltaDeg !== undefined && p.deltaDeg !== null;
+  }
+
+  function isTransPatch(p) {
+    return /line pressure|upshift|downshift/i.test(p.table || '');
   }
 
   function loadAll(store) {
@@ -84,7 +89,7 @@
       if (!acc[k]) {
         acc[k] = {
           table: p.table || '?', addressHex: p.addressHex || '?',
-          kind: isSparkPatch(p) ? 'spark' : 'fuel',
+          kind: isSparkPatch(p) ? 'spark' : (isTransPatch(p) ? 'trans' : 'fuel'),
           factor: 1, degrees: 0
         };
       }
@@ -171,6 +176,7 @@
         Object.keys(cum).forEach(function (k) {
           var c = cum[k];
           var limit = c.kind === 'spark' ? LIMITS.sparkDeg
+            : c.kind === 'trans' ? LIMITS.transPct
             : (/pe/i.test(c.table || '') ? LIMITS.pePct : LIMITS.fuelPct);
           var unit = c.kind === 'spark' ? '°' : '%';
           if (Math.abs(c.cumulative) >= limit) {

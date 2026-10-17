@@ -20,7 +20,9 @@ var ROOT = path.join(__dirname, '..');
 
 var WANT = ['Main VE', 'Idle VE', 'Main Spark Advance', 'Power Enrichment Target AFR',
   'AE Async Multiplier vs D-TPS', 'AE Multipler vs D-TPS',
-  'TPS% Threshold to Enter PE vs RPM'];
+  'TPS% Threshold to Enter PE vs RPM',
+  'Normal Upshifts', 'Normal Downshifts',
+  'Main Line Pressure 0-64MPH', 'Main Line Pressure 64-128MPH'];
 
 var full = JSON.parse(fs.readFileSync(path.join(ROOT, 'defs', 'xdf', 'p66-v6-34l.catalog.json'), 'utf8'));
 

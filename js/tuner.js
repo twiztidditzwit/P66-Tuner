@@ -13,6 +13,7 @@
     conservative: {
       maxFuelDeltaPct: 5,   // cap on VE/MAF correction per pass
       maxSparkDeltaDeg: 2,  // cap on spark advance change per pass
+      maxTransDeltaPct: 5,  // cap on line-pressure / shift-schedule change per pass
       minCellSamples: 30,   // minimum samples before a fuel cell is actionable
       minKnockSamples: 10,  // minimum knock samples before spark action
       trimThresholdPct: 4,  // |avg trim| above this triggers a suggestion
@@ -21,6 +22,7 @@
     balanced: {
       maxFuelDeltaPct: 8,
       maxSparkDeltaDeg: 3,
+      maxTransDeltaPct: 8,
       minCellSamples: 20,
       minKnockSamples: 6,
       trimThresholdPct: 3,
@@ -29,6 +31,7 @@
     aggressive: {
       maxFuelDeltaPct: 12,
       maxSparkDeltaDeg: 4,
+      maxTransDeltaPct: 10,
       minCellSamples: 10,
       minKnockSamples: 4,
       trimThresholdPct: 2,
@@ -484,6 +487,137 @@
   }
 
   /**
+   * Transmission suggestions from inferred-gear analysis.
+   *
+   * Throttle *feel* is half engine, half transmission: a perfect tip-in
+   * still feels lazy if the kickdown arrives a second late, and crisp
+   * shifts need the right line pressure behind them. Four findings:
+   *
+   * 1. trans-firmness — repeated upshift flare (RPM rises mid-shift) means
+   *    the clutches are slipping through the shift: soft, slow, and wearing.
+   *    Fix: +10% line pressure in the shift region (capped, ledger-guarded).
+   * 2. trans-kickdown — slow (>1.5 s) or missing kickdown on a throttle
+   *    stab: the transmission is ignoring the driver's request. Fix: lower
+   *    the Normal Downshift MPH thresholds ~10% so it kicks down earlier.
+   * 3. trans-hunting — repeated reversals between one gear pair at light
+   *    throttle: the shift schedule has no hysteresis where the driver
+   *    cruises. Fix: widen the gap ±5% (upshift later, downshift earlier).
+   * 4. trans-tcc — TCC lock/unlock cycling: reported only, never patched.
+   *    The TCC PWM/apply tables in this XDF revision carry uncertain
+   *    equations (e.g. X-128 on 8703/8802) and mis-scaling them can shudder
+   *    or overheat the converter. The tuner does not touch tables it cannot
+   *    interpret.
+   */
+  var TRANS_FIRM_MAX_PCT = 10;   // line pressure increase per pass
+  var TRANS_KICK_MAX_PCT = -10;  // downshift MPH threshold change per pass
+  var TRANS_HUNT_PCT = 5;        // hysteresis widening per pass
+
+  function transSuggestions(transReport, gates) {
+    var out = [];
+    if (!transReport || !transReport.available) return out;
+
+    // 1. Shift firmness from flare evidence.
+    if (transReport.upshifts >= transReport.minShifts) {
+      if (transReport.flaredShifts >= 3) {
+        var worst = transReport.flaredDetail.slice().sort(function (a, b) {
+          return b.flareRpm - a.flareRpm;
+        })[0];
+        out.push({
+          kind: 'trans-firmness', table: 'Main Line Pressure', cell: 'shift region',
+          action: 'increase', deltaPct: Math.min(TRANS_FIRM_MAX_PCT, gates.maxTransDeltaPct || 5),
+          region: worst ? { mph: worst.mphAt, from: worst.from, to: worst.to } : null,
+          reason: transReport.flaredShifts + ' of ' + transReport.upshifts +
+            ' upshifts flared (RPM rose mid-shift instead of dropping cleanly' +
+            (worst ? ', worst +' + worst.flareRpm + ' RPM on the ' +
+              worst.from + '-' + worst.to + ' shift at ~' + worst.mphAt + ' MPH' : '') +
+            '). The clutches are slipping through the shift — soft, slow, and wearing. ' +
+            'This tune raises line pressure about ' +
+            Math.min(TRANS_FIRM_MAX_PCT, gates.maxTransDeltaPct || 5) +
+            '% in the shift region for a firmer, quicker engagement. ' +
+            'Cumulative line-pressure moves are ledger-guarded at ±20%: pressure is not free, it loads the pump.',
+          confidence: transReport.flaredShifts >= 5 ? 'high' : 'medium',
+          samples: transReport.upshifts
+        });
+      } else if (transReport.flaredShifts > 0) {
+        out.push({
+          kind: 'trans-firmness', table: 'Main Line Pressure', cell: 'shift region',
+          action: 'none', deltaPct: 0,
+          reason: 'Only ' + transReport.flaredShifts + ' of ' + transReport.upshifts +
+            ' upshifts showed flare (need 3 to act). Shifts look healthy — no pressure change suggested.',
+          confidence: 'low', samples: transReport.upshifts
+        });
+      }
+    }
+
+    // 2. Kickdown response.
+    if (transReport.kickdowns >= transReport.minKickdowns) {
+      var slow = transReport.avgKickdownDelaySec !== null &&
+        transReport.avgKickdownDelaySec > transReport.slowKickdownSec;
+      var missing = transReport.kickdownNoShift > 0;
+      if (slow || missing) {
+        var why = slow
+          ? 'kickdown took ~' + transReport.avgKickdownDelaySec + ' s on average after the throttle stab'
+          : 'no downshift followed the throttle stab';
+        if (slow && missing) why += '; ' + transReport.kickdownNoShift + ' stab(s) got no downshift at all';
+        else if (missing) why = transReport.kickdownNoShift + ' throttle stab(s) got no downshift at all';
+        var kickDelta = Math.min(Math.abs(TRANS_KICK_MAX_PCT), gates.maxTransDeltaPct || 5);
+        // Target the thresholds near the speeds where kickdown was lazy.
+        var kdMphs = transReport.kickdownDetail
+          .filter(function (k) { return k.mphAt !== null; })
+          .map(function (k) { return k.mphAt; }).sort(function (a, b) { return a - b; });
+        var kickRegion = kdMphs.length
+          ? { mph: kdMphs[Math.floor(kdMphs.length / 2)] } : null;
+        out.push({
+          kind: 'trans-kickdown', table: 'Normal Downshifts', cell: 'part throttle',
+          action: 'raise', deltaPct: kickDelta,
+          region: kickRegion,
+          reason: 'Kickdown log review: ' + why +
+            ' — the transmission is ignoring the driver\'s request, which reads as dead throttle ' +
+            'no matter how good the engine tip-in is. This tune raises the downshift MPH thresholds about ' +
+            kickDelta + '% so it kicks down earlier. Each cell is capped below its matching upshift ' +
+            'cell so repeated passes cannot stack the schedules on top of each other.',
+          confidence: transReport.kickdowns >= 6 ? 'high' : 'medium',
+          samples: transReport.kickdowns
+        });
+      }
+    }
+
+    // 3. Shift hunting.
+    if (transReport.huntingEpisodes >= 1) {
+      var h0 = transReport.huntingDetail[0];
+      var huntDelta = Math.min(TRANS_HUNT_PCT, gates.maxTransDeltaPct || 5);
+      var huntRegion = h0 ? { mph: h0.mphAt, tps: h0.tpsAt, pair: h0.gears } : null;
+      out.push({
+        kind: 'trans-hunting', table: 'Normal Upshifts/Downshifts', cell: 'cruise region',
+        action: 'widen', deltaPct: huntDelta,
+        region: huntRegion,
+        reason: 'Shift hunting detected: ' + transReport.huntingEpisodes +
+          ' episode(s) of the transmission shuffling between gears' +
+          (h0 ? ' (' + h0.gears + ' around ' + h0.mphAt + ' MPH at ' + h0.tpsAt + '% TPS' : '') +
+          ') at light throttle. The upshift and downshift lines are too close together there — ' +
+          'every tiny throttle movement causes a shift. This tune widens the hysteresis about ' +
+          huntDelta + '% (upshift later, downshift earlier) in that region.',
+        confidence: 'medium', samples: transReport.shifts
+      });
+    }
+
+    // 4. TCC cycling — report only, never patch.
+    if (transReport.tccCycles >= 2) {
+      out.push({
+        kind: 'trans-tcc', table: 'TCC lock/unlock scheduling', cell: 'cruise',
+        action: 'none', deltaPct: 0,
+        reason: 'TCC lock/unlock cycling detected (' + transReport.tccCycles +
+          ' cycle(s), ' + transReport.tccApplies + ' applies / ' + transReport.tccReleases +
+          ' releases at cruise). The converter clutch is hunting, which feels like a surging ' +
+          'cruise. No change suggested: the TCC tables in this XDF revision carry uncertain ' +
+          'equations and mis-scaling them risks shudder or converter overheat — this one stays manual.',
+        confidence: 'medium', samples: transReport.tccApplies + transReport.tccReleases
+      });
+    }
+    return out;
+  }
+
+  /**
    * Generate the full suggestion set for a session report.
    * mode: 'conservative' | 'balanced' | 'aggressive'
    * catalog: XDF catalog used for spark-cell repeatability gating
@@ -497,7 +631,8 @@
       .concat(sparkSuggestions(report.knock, gates, catalog))
       .concat(peSuggestions(report.lambda, gates))
       .concat(aeSuggestions(report.tipIn, report.narrowband, gates))
-      .concat(peEntrySuggestions(report.peEntry, gates));
+      .concat(peEntrySuggestions(report.peEntry, gates))
+      .concat(transSuggestions(report.transmission, gates));
 
     var actionable = suggestions.filter(function (s) { return s.action !== 'none'; });
     var blocked = suggestions.filter(function (s) { return s.action === 'none'; });

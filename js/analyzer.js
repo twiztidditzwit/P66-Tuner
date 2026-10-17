@@ -702,6 +702,331 @@
   }
 
   /**
+   * Transmission analysis — gear inference, shift events, TCC behavior,
+   * kickdown response, and shift hunting.
+   *
+   * The P66 ALDL datastream carries no gear or TCC channels, so gear is
+   * inferred from the RPM/VSS ratio. A 4L60E's gear ratios (3.06 / 1.625 /
+   * 1.00 / 0.696) put each gear in a distinct RPM-per-MPH band (assuming a
+   * ~3.42 axle and stock-size tire; bands are wide enough to absorb common
+   * axle/tire combos, and VSS units are auto-detected from cruise data).
+   * An unlocked converter reads ~8-15% high (slip); a locked TCC reads at
+   * the band floor — that step is how TCC apply/release is detected.
+   *
+   * Needs RPM and VSS. TPS sharpens every finding (shift context, kickdown
+   * detection) but the gear/shift core works without it.
+   */
+  var TRANS_GEAR_CENTERS = [136, 72, 44.5, 31]; // RPM/MPH, gears 1-4
+  var TRANS_CONFIRM = 3;        // consecutive samples to confirm a gear
+  var TRANS_FLARE_RPM = 150;    // RPM rise during an upshift = slipping/flare
+  var TRANS_MIN_SHIFTS = 3;     // minimum upshifts before the tuner acts
+  var TRANS_KICK_DTPS = 20;     // % TPS jump that counts as a kickdown stab
+  var TRANS_KICK_TPS_MIN = 40;  // stab must reach at least this TPS
+  var TRANS_KICK_WINDOW = 20;   // samples (~3 s) to wait for the downshift
+  var TRANS_KICK_SLOW_SEC = 1.5;// avg kickdown slower than this = lazy
+  var TRANS_MIN_KICKDOWNS = 3;  // minimum kickdowns before the tuner acts
+  var TRANS_TCC_STEP = 0.06;    // 6% ratio step = TCC apply/release
+  var TRANS_HUNT_REVERSALS = 3;// gear-pair reversals in window = hunting
+  var TRANS_HUNT_WINDOW = 300;  // samples (~45 s)
+
+  function analyzeTransmission(rows, mapResult) {
+    var rpmCol = P66.columnFor(mapResult, 'RPM');
+    var vssCol = P66.columnFor(mapResult, 'VSS');
+    var tpsCol = P66.columnFor(mapResult, 'TPS');
+    if (!rpmCol || !vssCol) {
+      return { available: false, reason: 'Need RPM and VSS (vehicle speed) channels.' };
+    }
+
+    // Auto-detect VSS units: median RPM/VSS at light cruise should sit in
+    // the 4th-gear band (~31 in MPH, ~19 in KPH).
+    var cruiseRatios = [];
+    var prevVss = null;
+    rows.forEach(function (row) {
+      var rpm = num(row[rpmCol]), vss = num(row[vssCol]);
+      var tps = tpsCol ? num(row[tpsCol]) : null;
+      if (rpm === null || vss === null || vss < 5) { prevVss = vss; return; }
+      var dvss = (prevVss !== null && vss !== null) ? Math.abs(vss - prevVss) : 99;
+      if ((tps === null || (tps >= 8 && tps <= 35)) && dvss < 1.5 && rpm > 1200 && rpm < 2800) {
+        cruiseRatios.push(rpm / vss);
+      }
+      prevVss = vss;
+    });
+    cruiseRatios.sort(function (a, b) { return a - b; });
+    var medCruise = cruiseRatios.length ? cruiseRatios[Math.floor(cruiseRatios.length / 2)] : null;
+    var vssToMph = (medCruise !== null && medCruise < 25) ? 0.621371 : 1;
+    var vssUnit = vssToMph < 1 ? 'kph->mph' : 'mph';
+
+    function gearOf(ratio) {
+      if (ratio === null || ratio > 220 || ratio < 12) return null;
+      var best = null, bestD = Infinity;
+      for (var g = 0; g < 4; g++) {
+        var d = Math.abs(ratio - TRANS_GEAR_CENTERS[g]);
+        if (d < bestD) { bestD = d; best = g + 1; }
+      }
+      // Reject ambiguous midpoints (converter in transition).
+      var lo = TRANS_GEAR_CENTERS[best - 1];
+      if (bestD > lo * 0.28) return null;
+      return best;
+    }
+
+    // Per-sample gear with hysteresis: a new gear must persist
+    // TRANS_CONFIRM samples before it counts (debounces ratio noise).
+    var gears = new Array(rows.length).fill(null);
+    var ratios = new Array(rows.length).fill(null);
+    var candGear = null, candCount = 0, curGear = null;
+    rows.forEach(function (row, i) {
+      var rpm = num(row[rpmCol]);
+      var vss = num(row[vssCol]);
+      if (rpm === null || vss === null || vss < 2 || rpm < 400) {
+        gears[i] = curGear; ratios[i] = null; candGear = null; candCount = 0; return;
+      }
+      var ratio = rpm / (vss * vssToMph);
+      ratios[i] = round2(ratio);
+      var g = gearOf(ratio);
+      if (g === curGear) { candGear = null; candCount = 0; }
+      else if (g === candGear) {
+        if (++candCount >= TRANS_CONFIRM) { curGear = g; candGear = null; candCount = 0; }
+      } else { candGear = g; candCount = g === null ? 0 : 1; }
+      gears[i] = curGear;
+    });
+
+    function val(col, i) { return col ? num(rows[i][col]) : null; }
+
+    // --- shift events -------------------------------------------------
+    var shifts = [];
+    var lastShiftIdx = -1000;
+    for (var i = TRANS_CONFIRM + 2; i < rows.length; i++) {
+      var g0 = gears[i - TRANS_CONFIRM - 1], g1 = gears[i];
+      if (g0 === null || g1 === null || g0 === g1) continue;
+      if (i - lastShiftIdx < 15) continue; // one event per shift
+      lastShiftIdx = i;
+      // rpmAt: pre-shift peak, measured BEFORE the transition begins so a
+      // mid-shift flare cannot pollute its own baseline. Transition samples
+      // live roughly in [i-6, i]; the flare window is [i-4, i].
+      var rpmAt = null, mphAt = null, tpsAt = null, flare = 0;
+      for (var k = Math.max(0, i - 12); k < Math.max(0, i - 5); k++) {
+        var r = val(rpmCol, k);
+        if (r !== null && (rpmAt === null || r > rpmAt)) rpmAt = r;
+      }
+      for (var m = Math.max(0, i - 4); m <= i; m++) {
+        var r2 = val(rpmCol, m);
+        if (r2 !== null && rpmAt !== null && r2 - rpmAt > flare) flare = r2 - rpmAt;
+        if (m === i) {
+          var v = val(vssCol, m); mphAt = v === null ? null : round2(v * vssToMph);
+          tpsAt = val(tpsCol, m);
+        }
+      }
+      shifts.push({
+        index: i,
+        type: g1 > g0 ? 'upshift' : 'downshift',
+        from: g0, to: g1,
+        rpmAt: rpmAt, mphAt: mphAt, tpsAt: tpsAt,
+        durationSamples: TRANS_CONFIRM + 1,
+        durationSec: round2((TRANS_CONFIRM + 1) * 0.145),
+        flareRpm: Math.round(flare),
+        flared: g1 > g0 && flare >= TRANS_FLARE_RPM
+      });
+    }
+    var upshifts = shifts.filter(function (s) { return s.type === 'upshift'; });
+    var downshifts = shifts.filter(function (s) { return s.type === 'downshift'; });
+    var flared = upshifts.filter(function (s) { return s.flared; });
+    function avgShiftRpm(list, from, to) {
+      var f = list.filter(function (s) { return s.from === from && s.to === to && s.rpmAt !== null; });
+      if (!f.length) return null;
+      return Math.round(f.reduce(function (a, s) { return a + s.rpmAt; }, 0) / f.length);
+    }
+
+    // --- TCC apply/release: ratio step inside a constant gear ------------
+    var tccApplies = 0, tccReleases = 0, tccCycles = 0;
+    var tccEvents = [];
+    var lastTccIdx = -1000, lastTccType = null;
+    for (var t = 16; t < rows.length; t++) {
+      if (gears[t] === null || gears[t] < 3) continue;
+      if (gears[t] !== gears[t - 16]) continue; // gear must be constant
+      var tps = val(tpsCol, t);
+      var vss = val(vssCol, t);
+      if (tps !== null && tps > 45) continue;
+      if (vss === null || vss * vssToMph < 30) continue;
+      if (t - lastTccIdx < 40) continue; // one event per transition
+      var rA = [], rB = [];
+      for (var a = t - 16; a < t - 8; a++) if (ratios[a] !== null) rA.push(ratios[a]);
+      for (var b = t - 8; b <= t; b++) if (ratios[b] !== null) rB.push(ratios[b]);
+      if (rA.length < 5 || rB.length < 5) continue;
+      rA.sort(function (x, y) { return x - y; });
+      rB.sort(function (x, y) { return x - y; });
+      var mA = rA[Math.floor(rA.length / 2)], mB = rB[Math.floor(rB.length / 2)];
+      var step = (mA - mB) / mA;
+      var type = null;
+      if (step > TRANS_TCC_STEP) type = 'apply';       // ratio fell: converter locked
+      else if (step < -TRANS_TCC_STEP) type = 'release'; // ratio rose: converter unlocked
+      if (type && type !== lastTccType) {
+        if (type === 'apply') tccApplies++; else tccReleases++;
+        tccEvents.push({ index: t, type: type, gear: gears[t] });
+        lastTccIdx = t; lastTccType = type;
+      }
+    }
+    // Count lock/unlock pairs close together = TCC hunting.
+    for (var c = 1; c < tccEvents.length; c++) {
+      if (tccEvents[c].index - tccEvents[c - 1].index < TRANS_HUNT_WINDOW &&
+          tccEvents[c].type !== tccEvents[c - 1].type) tccCycles++;
+    }
+
+    // --- kickdown: throttle stab followed by a downshift -----------------
+    var kickdowns = [];
+    if (tpsCol) {
+      var prevTps = null;
+      rows.forEach(function (row, i) {
+        var tps = num(row[tpsCol]);
+        if (tps === null) { prevTps = null; return; }
+        if (prevTps !== null && tps - prevTps >= TRANS_KICK_DTPS && tps >= TRANS_KICK_TPS_MIN) {
+          var found = null;
+          for (var j = i + 1; j < Math.min(i + 1 + TRANS_KICK_WINDOW, rows.length); j++) {
+            var ds = shifts.filter(function (s) { return s.index >= i && s.index <= j && s.type === 'downshift'; });
+            if (ds.length) { found = ds[0]; break; }
+          }
+          var v = num(row[vssCol]);
+          kickdowns.push({
+            index: i, tpsFrom: round2(prevTps), tpsTo: round2(tps),
+            mphAt: v === null ? null : round2(v * vssToMph),
+            downshiftAt: found ? found.index : null,
+            delaySec: found ? round2((found.index - i) * 0.145) : null,
+            noKickdown: !found
+          });
+        }
+        prevTps = tps;
+      });
+    }
+    var kdDone = kickdowns.filter(function (k) { return !k.noKickdown; });
+    var avgKd = kdDone.length
+      ? round2(kdDone.reduce(function (a, k) { return a + k.delaySec; }, 0) / kdDone.length) : null;
+
+    // --- shift hunting: repeated reversals between one gear pair --------
+    var hunting = 0;
+    var huntingDetail = [];
+    for (var h = 0; h < shifts.length; h++) {
+      var rev = 0, first = shifts[h];
+      for (var q = h + 1; q < shifts.length && shifts[q].index - first.index < TRANS_HUNT_WINDOW; q++) {
+        var pair = [Math.min(shifts[q].from, shifts[q].to), Math.max(shifts[q].from, shifts[q].to)];
+        var fp = [Math.min(first.from, first.to), Math.max(first.from, first.to)];
+        if (pair[0] === fp[0] && pair[1] === fp[1] &&
+            shifts[q].type !== shifts[q - 1].type) rev++;
+      }
+      var tpsH = first.tpsAt;
+      if (rev >= TRANS_HUNT_REVERSALS && (tpsH === null || tpsH < 40)) {
+        hunting++;
+        huntingDetail.push({ gears: first.from + '-' + first.to, reversals: rev + 1,
+          mphAt: first.mphAt, tpsAt: first.tpsAt });
+        h += rev; // don't recount the same episode
+      }
+    }
+
+    var gearSamples = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    gears.forEach(function (g) { if (g) gearSamples[g]++; });
+
+    // --- PCM-measured shift times (when the log carries them) ------------
+    // The PCM holds the last shift's measured time until the next shift of
+    // that pair, so only value *changes* count as shift observations.
+    // NOTE: the companion "Shift Time Error" channels read a constant
+    // ~5.7 in the field logs seen so far — their encoding is not understood,
+    // so they are mapped but never used for tuning decisions.
+    function pcmShiftSnapshots(col, pair) {
+      var out = [];
+      if (!col) return out;
+      var prev = null, started = false;
+      rows.forEach(function (row, i) {
+        var v = num(row[col]);
+        if (v === null || v <= 0) { prev = v; started = true; return; }
+        // Only value *changes* count — the reading at log start is just
+        // the pre-log state, not an observed shift.
+        if (started && prev !== null && Math.abs(v - prev) > 0.005) {
+          out.push({ index: i, pair: pair, timeSec: round3(v) });
+        }
+        prev = v; started = true;
+      });
+      return out;
+    }
+    var pcmShifts = pcmShiftSnapshots(P66.columnFor(mapResult, 'SHIFT_T12'), '1-2')
+      .concat(pcmShiftSnapshots(P66.columnFor(mapResult, 'SHIFT_T23'), '2-3'));
+    function pcmTypical(pair) {
+      var ts = pcmShifts.filter(function (s) { return s.pair === pair; })
+        .map(function (s) { return s.timeSec; }).sort(function (a, b) { return a - b; });
+      return ts.length ? ts[Math.floor(ts.length / 2)] : null;
+    }
+
+    // --- TCC from the channel when the log carries it --------------------
+    // Falls back to the ratio-step inference above when absent/empty.
+    var tccSource = 'inferred';
+    var tccCol = P66.columnFor(mapResult, 'TCC');
+    if (tccCol) {
+      var tccSeen = 0, lastTccLocked = null, chApplies = 0, chReleases = 0;
+      var chEvents = [];
+      rows.forEach(function (row, i) {
+        var raw = row[tccCol];
+        if (raw === null || raw === undefined || String(raw).trim() === '') return;
+        tccSeen++;
+        var locked;
+        var n = num(raw);
+        if (n !== null) locked = n > 50; // duty-cycle style
+        else locked = /on|lock|engag/i.test(String(raw)); // state style
+        if (lastTccLocked !== null && locked !== lastTccLocked) {
+          if (locked) chApplies++; else chReleases++;
+          chEvents.push({ index: i, type: locked ? 'apply' : 'release', gear: gears[i] });
+        }
+        lastTccLocked = locked;
+      });
+      if (tccSeen > 10) {
+        tccSource = 'channel';
+        tccApplies = chApplies; tccReleases = chReleases;
+        tccEvents = chEvents.slice(0, 20);
+        tccCycles = 0;
+        for (var c2 = 1; c2 < chEvents.length; c2++) {
+          if (chEvents[c2].index - chEvents[c2 - 1].index < TRANS_HUNT_WINDOW &&
+              chEvents[c2].type !== chEvents[c2 - 1].type) tccCycles++;
+        }
+      }
+    }
+
+    return {
+      available: true,
+      vssUnit: vssUnit,
+      tccSource: tccSource,
+      cruiseRatioMedian: medCruise !== null ? round2(medCruise) : null,
+      shifts: shifts.length,
+      upshifts: upshifts.length,
+      downshifts: downshifts.length,
+      shiftEvents: shifts.slice(0, 30),
+      avgShiftRpm12: avgShiftRpm(upshifts, 1, 2),
+      avgShiftRpm23: avgShiftRpm(upshifts, 2, 3),
+      avgShiftRpm34: avgShiftRpm(upshifts, 3, 4),
+      flaredShifts: flared.length,
+      flaredDetail: flared.slice(0, 10).map(function (s) {
+        return { from: s.from, to: s.to, rpmAt: s.rpmAt, mphAt: s.mphAt, flareRpm: s.flareRpm };
+      }),
+      minShifts: TRANS_MIN_SHIFTS,
+      flareThresholdRpm: TRANS_FLARE_RPM,
+      tccApplies: tccApplies,
+      tccReleases: tccReleases,
+      tccCycles: tccCycles,
+      tccDetail: tccEvents.slice(0, 20),
+      kickdowns: kickdowns.length,
+      kickdownNoShift: kickdowns.filter(function (k) { return k.noKickdown; }).length,
+      avgKickdownDelaySec: avgKd,
+      slowKickdownSec: TRANS_KICK_SLOW_SEC,
+      minKickdowns: TRANS_MIN_KICKDOWNS,
+      kickdownDetail: kickdowns.slice(0, 15),
+      huntingEpisodes: hunting,
+      huntingDetail: huntingDetail.slice(0, 5),
+      gearSamples: gearSamples,
+      pcmShiftCount12: pcmShifts.filter(function (s) { return s.pair === '1-2'; }).length,
+      pcmShiftCount23: pcmShifts.filter(function (s) { return s.pair === '2-3'; }).length,
+      pcmTypicalShift12: pcmTypical('1-2'),
+      pcmTypicalShift23: pcmTypical('2-3'),
+      pcmShiftDetail: pcmShifts.slice(0, 10),
+      sampleSec: 0.145
+    };
+  }
+
+  /**
    * Bank-imbalance diagnostic.
    *
    * When both banks' trims are logged, a large bank-to-bank split in the
@@ -823,6 +1148,7 @@
       narrowband: analyzeNarrowband(rows, mapResult),
       tipIn: analyzeTipIn(rows, mapResult),
       peEntry: analyzePeEntry(rows, mapResult),
+      transmission: analyzeTransmission(rows, mapResult),
       bankImbalance: analyzeBankImbalance(rows, mapResult),
       baro: (typeof P66.analyzeBaro === 'function')
         ? P66.analyzeBaro(rows, mapResult, altitudeFt)
@@ -842,6 +1168,7 @@
   P66.analyzeNarrowband = analyzeNarrowband;
   P66.analyzeTipIn = analyzeTipIn;
   P66.analyzePeEntry = analyzePeEntry;
+  P66.analyzeTransmission = analyzeTransmission;
   P66.analyzeSession = analyzeSession;
   P66.toLambda = toLambda;
   P66.REGIONS = REGIONS;

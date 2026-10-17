@@ -206,6 +206,7 @@
           <button type="button" role="tab" data-tab="knock" aria-selected="false">Knock</button>
           <button type="button" role="tab" data-tab="sensors" aria-selected="false">Sensors</button>
           <button type="button" role="tab" data-tab="coverage" aria-selected="false">Coverage</button>
+          <button type="button" role="tab" data-tab="trans" aria-selected="false">Trans</button>
           <button type="button" role="tab" data-tab="history" aria-selected="false">History</button>
         </div>
         <div class="tab-panel active" data-panel="fuel" role="tabpanel">
@@ -238,6 +239,13 @@
           <div>
             <h3>Log Coverage <span class="muted" style="font-weight:normal">— what to log next</span></h3>
             <div id="coverage"><p class="muted">Run analysis to score log coverage.</p></div>
+          </div>
+        </div>
+        <div class="tab-panel" data-panel="trans" role="tabpanel">
+          <p class="muted tab-desc">What the transmission did — inferred gears, shift quality, TCC behavior, kickdown response.</p>
+          <div>
+            <h3>Transmission <span class="muted" style="font-weight:normal">— shifts, TCC, kickdown</span></h3>
+            <div id="trans-report"><p class="muted">Run analysis to render transmission data.</p></div>
           </div>
         </div>
         <div class="tab-panel" data-panel="history" role="tabpanel">

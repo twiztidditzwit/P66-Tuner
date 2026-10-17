@@ -607,6 +607,227 @@
     return { patches: patches, patched: patched, error: null, warnings: [] };
   }
 
+  /**
+   * Apply transmission suggestions: line pressure, downshift scheduling,
+   * and shift-hysteresis widening.
+   *
+   * Three patch types, each region-targeted and capped:
+   *
+   * - trans-firmness (action 'increase'): scales the two Main Line Pressure
+   *   tables up by deltaPct, but only in the MPH band where flaring shifts
+   *   were observed (±10 MPH). Pressure is capped at the 8-bit max; the
+   *   patch ledger guards cumulative moves at ±20% (see js/ledger.js).
+   * - trans-kickdown (action 'raise'): raises Normal Downshift MPH
+   *   thresholds by deltaPct near the speeds where kickdown was lazy
+   *   (±15 MPH of cell value). Each cell is capped at 90% of its matching
+   *   upshift cell (same TPS row, mirrored gear pair) so the downshift
+   *   schedule can never stack onto or cross the upshift schedule — the
+   *   structural guarantee against shift hunting.
+   * - trans-hunting (action 'widen'): widens hysteresis in the cruise
+   *   region — upshift cells later (+deltaPct), downshift cells earlier
+   *   (-deltaPct) — limited to the observed gear pair and MPH/TPS window.
+   *
+   * trans-tcc suggestions always carry action 'none' and never reach the
+   * patcher (filtered into `blocked` by generateSuggestions).
+   * Returns { patches, patched, error, warnings }.
+   */
+  var TRANS_LINE_PRESSURE_TABLES = ['Main Line Pressure 0-64MPH', 'Main Line Pressure 64-128MPH'];
+  var TRANS_UPSHIFT_TABLE = 'Normal Upshifts';
+  var TRANS_DOWNSHIFT_TABLE = 'Normal Downshifts';
+  var TRANS_FIRM_MPH_BAND = 10;
+  var TRANS_KICK_MPH_BAND = 15;
+  var TRANS_HUNT_TPS_BAND = 12.5;
+
+  function firstSuggestion(suggestions, kind, action) {
+    var found = null;
+    (suggestions || []).forEach(function (x) {
+      if (!found && x.kind === kind && x.action === action && x.deltaPct) found = x;
+    });
+    return found;
+  }
+
+  function numLabel(v) {
+    var n = parseFloat(v);
+    return isFinite(n) ? n : null;
+  }
+
+  function pushTransPatch(patches, patched, table, addr, eb, oldValue, newValue, deltaPct, extra) {
+    if (newValue === oldValue) return;
+    writeRaw(patched, addr, eb, newValue);
+    var p = {
+      table: table,
+      address: addr,
+      addressHex: '0x' + addr.toString(16).toUpperCase(),
+      sizeBytes: eb,
+      rpm: null,
+      map: null,
+      mph: extra && extra.mph !== undefined ? extra.mph : null,
+      tps: extra && extra.tps !== undefined ? extra.tps : null,
+      oldValue: oldValue,
+      newValue: newValue,
+      deltaPct: Math.round(deltaPct * 100) / 100,
+      smoothed: false,
+      confidence: extra && extra.confidence ? extra.confidence : null
+    };
+    patches.push(p);
+  }
+
+  function applyTransSuggestions(catalog, binBytes, suggestions, options) {
+    options = options || {};
+    var firm = firstSuggestion(suggestions, 'trans-firmness', 'increase');
+    var kick = firstSuggestion(suggestions, 'trans-kickdown', 'raise');
+    var hunt = firstSuggestion(suggestions, 'trans-hunting', 'widen');
+    if (!firm && !kick && !hunt) {
+      return { patches: [], patched: new Uint8Array(binBytes), error: null, warnings: [] };
+    }
+
+    var patched = new Uint8Array(binBytes); // copy
+    var patches = [];
+    var warnings = [];
+    function fail(msg) {
+      return { patches: [], patched: null, error: msg, warnings: [] };
+    }
+
+    // --- 1. Line pressure for shift firmness ---------------------------
+    if (firm) {
+      var factor = 1 + firm.deltaPct / 100;
+      var regionMph = firm.region && firm.region.mph !== null ? firm.region.mph : null;
+      if (regionMph === null) {
+        warnings.push('trans-firmness: no shift region recorded — skipped');
+      } else {
+        TRANS_LINE_PRESSURE_TABLES.forEach(function (name) {
+          var t = readTable(catalog, name, patched);
+          if (!t) { warnings.push(name + ': table not readable — skipped'); return; }
+          var eb = t.elementBytes;
+          var maxRaw = eb === 2 ? 0xFFFF : 0xFF;
+          var mphBp = axisBreakpoints(t.table.xAxis);
+          var tpsBp = axisBreakpoints(t.table.yAxis);
+          for (var r = 0; r < t.rows; r++) {
+            for (var c = 0; c < t.cols; c++) {
+              var mph = mphBp[c] !== undefined ? mphBp[c] : null;
+              if (mph === null || Math.abs(mph - regionMph) > TRANS_FIRM_MPH_BAND) continue;
+              var addr = t.base + (r * t.cols + c) * eb;
+              var oldValue = t.values[r][c];
+              var newValue = Math.min(maxRaw, Math.round(oldValue * factor));
+              pushTransPatch(patches, patched, name, addr, eb, oldValue, newValue,
+                firm.deltaPct, { mph: mph, tps: tpsBp[r] !== undefined ? tpsBp[r] : null,
+                  confidence: firm.confidence });
+            }
+          }
+        });
+      }
+    }
+
+    // --- 2. Earlier kickdown: raise downshift thresholds ----------------
+    // Structural guard: a downshift cell may never reach its matching
+    // upshift cell (same TPS row, mirrored pair, e.g. 4-3 vs 3-4).
+    if (kick) {
+      var kFactor = 1 + kick.deltaPct / 100;
+      var kRegionMph = kick.region && kick.region.mph !== null ? kick.region.mph : null;
+      var kd = readTable(catalog, TRANS_DOWNSHIFT_TABLE, patched);
+      if (!kd) return fail(TRANS_DOWNSHIFT_TABLE + ': table not readable from this binary/catalog');
+      var up = readTable(catalog, TRANS_UPSHIFT_TABLE, patched);
+      var kdEb = kd.elementBytes;
+      var kdMax = kdEb === 2 ? 0xFFFF : 0xFF;
+      var kdTpsBp = axisBreakpoints(kd.table.yAxis);
+      var kdCols = kd.table.xAxis.labels || [];
+      var upCols = up ? (up.table.xAxis.labels || []) : [];
+      var upTpsBp = up ? axisBreakpoints(up.table.yAxis) : [];
+      for (var kr = 0; kr < kd.rows; kr++) {
+        for (var kc = 0; kc < kd.cols; kc++) {
+          var kAddr = kd.base + (kr * kd.cols + kc) * kdEb;
+          var kOld = kd.values[kr][kc];
+          // Physical MPH of this cell (equation X/2 applied by convention
+          // of the shift tables; compare in raw to avoid float drift).
+          var kOldMph = kOld / 2;
+          if (kRegionMph !== null && Math.abs(kOldMph - kRegionMph) > TRANS_KICK_MPH_BAND) continue;
+          var kNew = Math.round(kOld * kFactor);
+          // Cap below the matching upshift cell.
+          var pairLabel = kdCols[kc] || '';
+          var mirror = pairLabel.split('-').reverse().join('-'); // '4-3' -> '3-4'
+          var uc = upCols.indexOf(mirror);
+          var cap = Math.min(kdMax, Math.round(kOld * 1.5));
+          if (up && uc !== -1 && kr < up.rows) {
+            var upTps = upTpsBp[kr], kdTps = kdTpsBp[kr];
+            if (upTps !== undefined && kdTps !== undefined && Math.abs(upTps - kdTps) < 0.01) {
+              cap = Math.min(cap, Math.floor(up.values[kr][uc] * 0.9));
+            }
+          }
+          kNew = Math.max(kOld, Math.min(cap, kNew));
+          pushTransPatch(patches, patched, TRANS_DOWNSHIFT_TABLE, kAddr, kdEb, kOld, kNew,
+            kick.deltaPct, { mph: kOldMph,
+              tps: kdTpsBp[kr] !== undefined ? kdTpsBp[kr] : null,
+              confidence: kick.confidence });
+        }
+      }
+    }
+
+    // --- 3. Hunting: widen hysteresis in the cruise region --------------
+    if (hunt) {
+      var hFactor = 1 + hunt.deltaPct / 100;
+      var hRegion = hunt.region || {};
+      var upT = readTable(catalog, TRANS_UPSHIFT_TABLE, patched);
+      var dnT = readTable(catalog, TRANS_DOWNSHIFT_TABLE, patched);
+      if (!upT || !dnT) {
+        warnings.push('trans-hunting: shift tables not readable — skipped');
+      } else {
+        var upEb = upT.elementBytes, dnEb = dnT.elementBytes;
+        var upTpsBp = axisBreakpoints(upT.table.yAxis);
+        var dnTpsBp = axisBreakpoints(dnT.table.yAxis);
+        var upLabels = upT.table.xAxis.labels || [];
+        var dnLabels = dnT.table.xAxis.labels || [];
+        function pairCols(labels, want) {
+          if (!want) return labels.map(function (_, i) { return i; });
+          var idx = labels.indexOf(want);
+          return idx === -1 ? [] : [idx];
+        }
+        // Normalize the pair: the episode may start with a downshift
+        // ("3-2"), but the upshift column is always low-high ("2-3").
+        var pairNums = String(hRegion.pair || '').split('-')
+          .map(function (x) { return parseInt(x, 10); })
+          .filter(isFinite).sort();
+        var upWant = pairNums.length === 2 ? pairNums.join('-') : null;
+        var dnWant = pairNums.length === 2 ? pairNums.slice().reverse().join('-') : null;
+        // Gate on the TPS row: the hunting happened at this throttle
+        // position, so these are the thresholds that govern it. The cell's
+        // MPH value is what we are changing — gating on it would be
+        // circular. Observed MPH is reported for context only.
+        function inRegion(tpsLabel) {
+          if (hRegion.tps !== null && hRegion.tps !== undefined && tpsLabel !== null &&
+              Math.abs(tpsLabel - hRegion.tps) > TRANS_HUNT_TPS_BAND) return false;
+          return true;
+        }
+        pairCols(upLabels, upWant).forEach(function (c) {
+          for (var r = 0; r < upT.rows; r++) {
+            var tpsL = upTpsBp[r] !== undefined ? upTpsBp[r] : null;
+            if (!inRegion(tpsL)) continue;
+            var addr = upT.base + (r * upT.cols + c) * upEb;
+            var oldV = upT.values[r][c];
+            var newV = Math.min(upEb === 2 ? 0xFFFF : 0xFF, Math.round(oldV * hFactor));
+            pushTransPatch(patches, patched, TRANS_UPSHIFT_TABLE, addr, upEb, oldV, newV,
+              hunt.deltaPct, { mph: oldV / 2, tps: tpsL, confidence: hunt.confidence });
+          }
+        });
+        pairCols(dnLabels, dnWant).forEach(function (c) {
+          for (var r2 = 0; r2 < dnT.rows; r2++) {
+            var tpsL2 = dnTpsBp[r2] !== undefined ? dnTpsBp[r2] : null;
+            if (!inRegion(tpsL2)) continue;
+            var addr2 = dnT.base + (r2 * dnT.cols + c) * dnEb;
+            var oldV2 = dnT.values[r2][c];
+            var newV2 = Math.max(0, Math.round(oldV2 / hFactor));
+            pushTransPatch(patches, patched, TRANS_DOWNSHIFT_TABLE, addr2, dnEb, oldV2, newV2,
+              -hunt.deltaPct, { mph: oldV2 / 2, tps: tpsL2, confidence: hunt.confidence });
+          }
+        });
+      }
+    }
+
+    if (!patches.length && warnings.length) {
+      return { patches: [], patched: null, error: warnings.join(' / '), warnings: [] };
+    }
+    return { patches: patches, patched: patched, error: null, warnings: warnings };
+  }
+
   P66.findTable = findTable;
   P66.readTable = readTable;
   P66.mapTrimCellToVE = mapTrimCellToVE;
@@ -615,6 +836,7 @@
   P66.applyPeSuggestions = applyPeSuggestions;
   P66.applyAeSuggestions = applyAeSuggestions;
   P66.applyPeEntrySuggestions = applyPeEntrySuggestions;
+  P66.applyTransSuggestions = applyTransSuggestions;
   P66.rawPerDegree = rawPerDegree;
 
   /* ---------- XDF XML parsing (browser + node) ---------- */

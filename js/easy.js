@@ -198,8 +198,12 @@
     var peEntry = (typeof P66.applyPeEntrySuggestions === 'function')
       ? P66.applyPeEntrySuggestions(catalog, peEntryBase, sug.actionable)
       : { patches: [], patched: null, error: null, warnings: [] };
-    var allPatches = (fuel.patches || []).concat(spark.patches || [], pe.patches || [], ae.patches || [], peEntry.patches || []);
-    var finalImage = peEntry.patched || ae.patched || pe.patched || spark.patched || fuel.patched;
+    var transBase = (peEntry.patched && !peEntry.error) ? peEntry.patched : peEntryBase;
+    var trans = (typeof P66.applyTransSuggestions === 'function')
+      ? P66.applyTransSuggestions(catalog, transBase, sug.actionable)
+      : { patches: [], patched: null, error: null, warnings: [] };
+    var allPatches = (fuel.patches || []).concat(spark.patches || [], pe.patches || [], ae.patches || [], peEntry.patches || [], trans.patches || []);
+    var finalImage = trans.patched || peEntry.patched || ae.patched || pe.patched || spark.patched || fuel.patched;
 
     var verification = (typeof P66.verifyPatches === 'function')
       ? P66.verifyPatches(catalog, binBytes, { patches: allPatches, patched: finalImage, error: null })

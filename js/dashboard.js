@@ -1293,11 +1293,72 @@
     };
   }
 
+  /* ---------- transmission ---------- */
+
+  function renderTransmission(container, report) {
+    clear(container);
+    var tr = report.transmission;
+    var wrap = document.createElement('div');
+    if (!tr || !tr.available) {
+      emptyMsg(container, (tr && tr.reason) || 'Transmission analysis unavailable.');
+      return;
+    }
+    function fmt(v, suffix) {
+      return v === null || v === undefined ? '—' : v + (suffix || '');
+    }
+    var html = '<p class="muted">Gear is inferred from RPM vs speed (the ALDL stream carries no gear channel). ' +
+      'VSS read as ' + tr.vssUnit + '. TCC: ' + (tr.tccSource === 'channel' ? 'read from the log' : 'inferred') + '.</p>';
+    if (tr.pcmShiftCount12 || tr.pcmShiftCount23) {
+      html += '<p><strong>PCM-measured shift times:</strong> ' +
+        '1-2: ' + (tr.pcmTypicalShift12 !== null ? tr.pcmTypicalShift12 + ' s (' + tr.pcmShiftCount12 + ' shifts)' : '—') +
+        ' · 2-3: ' + (tr.pcmTypicalShift23 !== null ? tr.pcmTypicalShift23 + ' s (' + tr.pcmShiftCount23 + ' shifts)' : '—') +
+        '</p>';
+    }
+    html += '<p><strong>' + tr.shifts + ' shifts</strong> detected (' + tr.upshifts + ' up, ' +
+      tr.downshifts + ' down) · ' + tr.flaredShifts + ' flared · ' +
+      tr.tccApplies + ' TCC applies / ' + tr.tccReleases + ' releases · ' +
+      tr.kickdowns + ' kickdown stabs' +
+      (tr.avgKickdownDelaySec !== null ? ' (avg ' + tr.avgKickdownDelaySec + ' s)' : '') + ' · ' +
+      tr.huntingEpisodes + ' hunting episode(s)</p>';
+
+    var avgs = [
+      ['1→2', tr.avgShiftRpm12], ['2→3', tr.avgShiftRpm23], ['3→4', tr.avgShiftRpm34]
+    ].filter(function (x) { return x[1] !== null; });
+    if (avgs.length) {
+      html += '<p><strong>Avg shift RPM:</strong> ' +
+        avgs.map(function (x) { return x[0] + ' @ ' + x[1].toLocaleString('en-US'); }).join(' · ') + '</p>';
+    }
+    if (tr.huntingDetail.length) {
+      html += '<p>⚠️ <strong>Shift hunting:</strong> ' + tr.huntingDetail.map(function (h) {
+        return h.gears + ' around ' + h.mphAt + ' MPH';
+      }).join('; ') + '</p>';
+    }
+    if (tr.tccCycles >= 2) {
+      html += '<p>⚠️ <strong>TCC cycling</strong> at cruise (' + tr.tccCycles +
+        ' lock/unlock cycles) — reported only, never auto-tuned.</p>';
+    }
+    if (tr.shiftEvents.length) {
+      html += '<table><thead><tr><th>Shift</th><th>RPM</th><th>MPH</th><th>TPS</th><th>Flare</th></tr></thead><tbody>';
+      tr.shiftEvents.slice(0, 12).forEach(function (s) {
+        html += '<tr><td>' + s.from + '→' + s.to + ' ' + s.type + '</td><td>' +
+          fmt(s.rpmAt === null ? null : s.rpmAt.toLocaleString('en-US')) + '</td><td>' +
+          fmt(s.mphAt) + '</td><td>' + fmt(s.tpsAt, '%') + '</td><td>' +
+          (s.flared ? '⚠️ +' + s.flareRpm + ' RPM' : '—') + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<p class="muted">No shifts detected — log some driving with steady throttle and gear changes to unlock shift analysis.</p>';
+    }
+    wrap.innerHTML = html;
+    container.appendChild(wrap);
+  }
+
   /* ---------- entry point ---------- */
 
   function renderDashboard(parts, report, parsedLog, mapResult, history, sessionMeta) {
     if (parts.heatmap) renderHeatmap(parts.heatmap, report.fuelTrims);
     if (parts.coverage) renderCoverage(parts.coverage, report);
+    if (parts.trans) renderTransmission(parts.trans, report);
     if (parts.journal) renderJournal(parts.journal, sessionMeta);
     if (parts.regions) renderRegionBars(parts.regions, report);
     if (parts.knock) renderKnockTimeline(parts.knock, parsedLog.rows, mapResult);
@@ -1312,6 +1373,7 @@
   P66.renderRegionBars = renderRegionBars;
   P66.renderComparison = renderComparison;
   P66.renderCoverage = renderCoverage;
+  P66.renderTransmission = renderTransmission;
   P66.renderJournal = renderJournal;
   P66.veComparisonData = veComparisonData;
   P66.renderVeComparison = renderVeComparison;

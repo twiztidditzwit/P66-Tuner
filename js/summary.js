@@ -100,6 +100,28 @@
         '%) so the engine fuels up sooner when you floor it.');
     });
 
+    var firm = (suggestions || []).filter(function (s) { return s.kind === 'trans-firmness' && s.action !== 'none'; });
+    firm.forEach(function (s) {
+      bullets.push('Shift feel: your log shows the transmission slipping through upshifts (RPM flares mid-shift). ' +
+        'This tune raises line pressure about ' + Math.abs(s.deltaPct) +
+        '% in the shift region for firmer, quicker shifts. Cumulative pressure moves are capped — pressure loads the pump, it is not free.');
+    });
+
+    var kick = (suggestions || []).filter(function (s) { return s.kind === 'trans-kickdown' && s.action !== 'none'; });
+    kick.forEach(function (s) {
+      bullets.push('Kickdown: the transmission was slow or refusing to downshift when you stabbed the throttle. ' +
+        'This tune raises the downshift speeds about ' + Math.abs(s.deltaPct) +
+        '% so it kicks down earlier — a big part of how "responsive" the throttle feels. ' +
+        'Each cell stays below its matching upshift cell so the schedules can never stack.');
+    });
+
+    var hunt = (suggestions || []).filter(function (s) { return s.kind === 'trans-hunting' && s.action !== 'none'; });
+    hunt.forEach(function (s) {
+      bullets.push('Shift busyness: the transmission was shuffling between gears at light throttle. ' +
+        'This tune widens the shift hysteresis about ' + Math.abs(s.deltaPct) +
+        '% (upshift later, downshift earlier) in that cruise region so it stops hunting.');
+    });
+
     var n = (patches || []).length;
     var headline;
     if (!bullets.length) {

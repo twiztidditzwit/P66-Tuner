@@ -105,11 +105,30 @@ but it's a static calibration choice with emissions consequences, not a
 log-driven correction. **Not tuned;** documented here so the choice is
 explicit.
 
-## 7. Transmission (shift firmness/scheduling)
+## 7. Transmission (shift firmness/scheduling) — NOW IN SCOPE
 
-Shift tables exist in the XDF but shift *feel* is a separate domain from
-engine throttle response, with its own risks (clutch life). **Out of
-scope** for the engine tuner.
+Shift *feel* used to be out of scope ("separate domain, clutch-life
+risks"). It is now handled, because throttle *feel* is half engine and
+half transmission: a perfect tip-in still reads as dead throttle if the
+kickdown arrives a second late, and crisp shifts need line pressure
+behind them. The ALDL stream carries no gear or TCC channel, so the
+analyzer infers gear from the RPM/VSS ratio — a 4L60E's ratios
+(3.06/1.625/1.00/0.696) put each gear in a distinct RPM-per-MPH band,
+with VSS units auto-detected from cruise data.
+
+| Finding | Log evidence | Tuner action |
+|---|---|---|
+| Upshift flare (clutch slipping: RPM rises mid-shift) | ≥3 flaring upshifts, flare ≥150 RPM | ✅ +5–10%/pass line pressure in the shift MPH band (Main Line Pressure 0-64/64-128), ledger-guarded at ±20% cumulative |
+| Lazy/missing kickdown | ≥3 throttle stabs, avg downshift delay >1.5 s or no downshift | ✅ raise Normal Downshift MPH thresholds 5–10%/pass near the lazy speeds; each cell capped below 90% of its matching upshift cell so the schedules can never stack |
+| Shift hunting (gear shuffling at light throttle) | ≥3 reversals of one gear pair within ~45 s | ✅ widen hysteresis 5%/pass in that cruise TPS region (upshift later, downshift earlier) |
+| TCC lock/unlock cycling at cruise | ≥2 cycles | ❌ report only — the TCC tables in this XDF revision carry uncertain equations (e.g. X-128); mis-scaling risks shudder or converter overheat. Manual fix. |
+
+**Deliberately still untouched:** Trans Hot / 2nd-Gear-Start / Cruise
+shift tables (mode-specific, not log-distinguishable), Desired Shift
+Times (adapt targets, not log-detectable), Force Motor current tables
+(pressure is commanded through the Main Line Pressure tables; the force
+motor tables are the actuator calibration underneath), stall torque
+management (launch-only, not log-detectable).
 
 ## 8. DFCO / decel
 
@@ -124,7 +143,15 @@ toward the AE evidence.
    vs D-TPS tables (+10–20%/pass, O2-health gated).
 2. **PE entry** — detects late/missing power enrichment, lowers the TPS
    entry threshold (−10%/pass, floored at ~50% TPS).
-3. Everything else above is either already optimal (PE delay, upshift
-   TM), not log-detectable (stall TM, EGR, trans), unsafe to auto-tune
-   (IAC follower, main spark advance), or uninterpretable in the XDF
-   (AE coolant/MAP/MPH axes).
+3. **Kickdown** — detects slow or missing downshifts on throttle stabs,
+   raises the Normal Downshift MPH thresholds (+5–10%/pass, capped below
+   the matching upshift cells). This is the transmission half of throttle
+   feel.
+4. **Shift firmness** — detects upshift flare (clutch slip), raises line
+   pressure (+5–10%/pass in the shift MPH band, ±20% ledger guard).
+5. **Shift hunting** — detects gear shuffling at cruise, widens the
+   upshift/downshift hysteresis (±5%/pass in that TPS region).
+6. Everything else above is either already optimal (PE delay, upshift
+   TM), not log-detectable (stall TM, EGR, TCC apply tables), unsafe to
+   auto-tune (IAC follower, main spark advance), report-only by design
+   (TCC cycling), or uninterpretable in the XDF (AE coolant/MAP/MPH axes).
