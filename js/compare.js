@@ -61,60 +61,72 @@
 
   function round2(v) { return Math.round(v * 100) / 100; }
 
-  function num(v) {
-    return (typeof v === 'number' && isFinite(v)) ? v : null;
-  }
+  function nn(v) { return v !== v ? null : v; }
 
-  function sampleColumn(rows, col, max) {
+  // Sample up to max numeric values from a column for style detection.
+  function sampleColumn(t, name, max) {
     max = max || 500;
     var out = [];
-    for (var i = 0; i < rows.length && out.length < max; i++) {
-      var v = num(rows[i][col]);
-      if (v !== null) out.push(v);
+    var c = P66.numView(t, name);
+    if (!c) return out;
+    for (var i = 0; i < t.rowCount && out.length < max; i++) {
+      var v = c[i];
+      if (v === v) out.push(v);
     }
     return out;
   }
 
   // Mean combined trim per cell (128-count units) for one log.
+  // parsedLog: a log table, a legacy { rows: [...] } parsed shape, or a
+  // legacy row-object array.
   function cellTrims(parsedLog, mapResult) {
-    var raw = (parsedLog && parsedLog.rows) || parsedLog || [];
-    var rows = Array.isArray(raw) ? raw.slice() : [];
-    if (typeof P66.segmentRows === 'function') P66.segmentRows(rows, mapResult);
+    var t = P66.asTable(parsedLog);
+    if (!t || !t.rowCount) {
+      return { available: false, reason: 'No rows to compare.' };
+    }
+    if (typeof P66.segmentRows === 'function') P66.segmentRows(t, mapResult);
     var q = (typeof P66.qualityRows === 'function')
-      ? P66.qualityRows(rows, mapResult)
-      : { rows: rows };
+      ? P66.qualityRows(t, mapResult)
+      : { rows: t };
+    var gt = P66.asTable(q.rows);
     var banks = P66.fuelTrimBanks(mapResult);
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var mapCol = P66.columnFor(mapResult, 'MAP');
-    if (!banks.length || !rpmCol || !mapCol) {
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var mapName = P66.columnFor(mapResult, 'MAP');
+    var rpmC = P66.numView(gt, rpmName);
+    var mapC = P66.numView(gt, mapName);
+    if (!banks.length || !rpmC || !mapC) {
       return { available: false, reason: 'Need STFT/LTFT, RPM and MAP channels.' };
     }
     // Detect each trim column's encoding once, on the gated rows.
     var styles = banks.map(function (b) {
       return {
-        stft: b.stft ? P66.detectTrimStyle(sampleColumn(q.rows, b.stft)) : 'percent',
-        ltft: b.ltft ? P66.detectTrimStyle(sampleColumn(q.rows, b.ltft)) : 'percent'
+        stft: b.stft ? P66.detectTrimStyle(sampleColumn(gt, b.stft)) : 'percent',
+        ltft: b.ltft ? P66.detectTrimStyle(sampleColumn(gt, b.ltft)) : 'percent'
       };
     });
+    var trimCols = banks.map(function (b) {
+      return { stft: P66.numView(gt, b.stft), ltft: P66.numView(gt, b.ltft) };
+    });
     var cells = {}; // "rpmBin|mapBin" -> { rpmBin, mapBin, sum, n }
-    q.rows.forEach(function (row) {
-      var rpm = num(row[rpmCol]);
-      var map = num(row[mapCol]);
-      if (rpm === null || map === null) return;
-      var sum = 0, n = 0;
-      banks.forEach(function (b, bi) {
-        var stft = b.stft ? P66.trimToPct(num(row[b.stft]), styles[bi].stft) : 0;
-        var ltft = b.ltft ? P66.trimToPct(num(row[b.ltft]), styles[bi].ltft) : 0;
+    for (var i = 0; i < gt.rowCount; i++) {
+      var rpm = rpmC[i];
+      var map = mapC[i];
+      if (rpm !== rpm || map !== map) continue;
+      var sum = 0, nb = 0;
+      for (var bi = 0; bi < banks.length; bi++) {
+        var tc = trimCols[bi];
+        var stft = tc.stft ? P66.trimToPct(nn(tc.stft[i]), styles[bi].stft) : 0;
+        var ltft = tc.ltft ? P66.trimToPct(nn(tc.ltft[i]), styles[bi].ltft) : 0;
         sum += stft + ltft;
-        n++;
-      });
-      var combinedPct = n ? sum / n : 0;
+        nb++;
+      }
+      var combinedPct = nb ? sum / nb : 0;
       var key = rpmBin(rpm) + '|' + mapBin(map);
       var c = cells[key];
       if (!c) c = cells[key] = { rpmBin: rpmBin(rpm), mapBin: mapBin(map), sum: 0, n: 0 };
       c.sum += combinedPct;
       c.n++;
-    });
+    }
     var out = {};
     Object.keys(cells).forEach(function (key) {
       var c = cells[key];

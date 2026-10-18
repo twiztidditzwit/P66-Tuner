@@ -830,7 +830,6 @@
 
   P66.findTable = findTable;
   P66.readTable = readTable;
-  P66.mapTrimCellToVE = mapTrimCellToVE;
   P66.applyFuelSuggestions = applyFuelSuggestions;
   P66.applySparkSuggestions = applySparkSuggestions;
   P66.applyPeSuggestions = applyPeSuggestions;

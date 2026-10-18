@@ -39,6 +39,30 @@ var sorted = P66.sortXdfRecords([
 ]);
 check('sortRecords newest first', sorted[0].name === 'new');
 
+// ---- filterXdfRecords (search/filter box) ----
+var frecs = [
+  { name: 'p66-v6', fileName: 'p66-v6.xdf' },
+  { name: 'LT1-fbody', fileName: 'lt1-fbody.xdf' },
+  { name: 'p66-v6 (2)', fileName: 'p66-v6.xdf' }
+];
+var hit = P66.filterXdfRecords(frecs, 'p66');
+check('filterXdfRecords substring match', hit.length === 2 &&
+  hit[0].name === 'p66-v6' && hit[1].name === 'p66-v6 (2)');
+var ci = P66.filterXdfRecords(frecs, 'LT1');
+check('filterXdfRecords case-insensitive', ci.length === 1 && ci[0].name === 'LT1-fbody');
+var all = P66.filterXdfRecords(frecs, '');
+check('filterXdfRecords empty query shows all', all.length === 3 &&
+  all[0].name === 'p66-v6' && all[2].name === 'p66-v6 (2)');
+check('filterXdfRecords empty query returns a copy', all !== frecs);
+var nul = P66.filterXdfRecords(frecs, null);
+check('filterXdfRecords null query shows all', nul.length === 3);
+var none = P66.filterXdfRecords(frecs, 'zzz-nope');
+check('filterXdfRecords no-match state', none.length === 0);
+var fb = P66.filterXdfRecords([{ fileName: 'robertisaar-P66.xdf' }], 'saar');
+check('filterXdfRecords falls back to fileName', fb.length === 1);
+var mid = P66.filterXdfRecords(frecs, 'fbo');
+check('filterXdfRecords mid-string match', mid.length === 1 && mid[0].name === 'LT1-fbody');
+
 // ---- library roundtrip on the memory backend ----
 var lib = P66.createXdfLibrary(P66.xdfMemoryBackend());
 var savedId = null;

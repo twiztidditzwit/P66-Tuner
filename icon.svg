@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="P66 Tuner icon">
+  <defs>
+    <!-- app dark-theme background, matching styles.css -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0c0f14"/>
+      <stop offset="1" stop-color="#10151d"/>
+    </linearGradient>
+    <!-- spectral value ramp used for VE cells in the app -->
+    <linearGradient id="trim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="0.35" stop-color="#22d3ee"/>
+      <stop offset="0.6" stop-color="#facc15"/>
+      <stop offset="1" stop-color="#ef4444"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="url(#bg)"/>
+  <!-- VE surface grid -->
+  <g stroke="#263041" stroke-width="2" opacity="0.9">
+    <line x1="76" y1="336" x2="436" y2="336"/>
+    <line x1="76" y1="256" x2="436" y2="256"/>
+    <line x1="76" y1="176" x2="436" y2="176"/>
+    <line x1="156" y1="120" x2="156" y2="392"/>
+    <line x1="256" y1="120" x2="256" y2="392"/>
+    <line x1="356" y1="120" x2="356" y2="392"/>
+  </g>
+  <!-- trim-correction curve: rich dip left (red), lean rise right (blue) -->
+  <path d="M76 300 C140 300 170 268 220 268 C280 268 310 208 380 208 C410 208 424 196 436 192"
+        fill="none" stroke="url(#trim)" stroke-width="16" stroke-linecap="round" filter="url(#glow)"/>
+  <!-- O2 crosscount dashes (the app watches narrowband switching) -->
+  <g stroke="#facc15" stroke-width="10" stroke-linecap="round">
+    <line x1="140" y1="176" x2="170" y2="176"/>
+    <line x1="256" y1="176" x2="286" y2="176"/>
+    <line x1="372" y1="176" x2="402" y2="176"/>
+  </g>
+  <text x="256" y="452" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="56" font-weight="700" fill="#e8edf4" letter-spacing="6">P66</text>
+</svg>

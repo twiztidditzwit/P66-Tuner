@@ -4,6 +4,11 @@
  *   - fuel trim bias by RPM x MAP cell
  *   - knock retard frequency / severity
  *   - commanded vs actual lambda error
+ *
+ * All entry points accept either a columnar log table (from
+ * P66.parseLogText) or a legacy array of row objects; legacy input is
+ * normalized once at the boundary via P66.asTable, and every hot loop
+ * below runs on Float32Array columns (NaN = missing cell).
  */
 (function (global) {
   'use strict';
@@ -12,57 +17,75 @@
 
   var REGIONS = ['idle', 'cruise', 'transient', 'wot'];
 
-  function num(v) {
-    return (typeof v === 'number' && isFinite(v)) ? v : null;
-  }
+  // NaN -> null (missing-cell bridge for helpers that expect null).
+  function nn(v) { return v !== v ? null : v; }
+
+  // Numeric column for a mapped signal name, or null.
+  function ncol(t, name) { return P66.numView(t, name); } // forgiving per-cell-parsed view
 
   // Sample up to N numeric values from a column for style detection.
-  function sampleColumn(rows, col, max) {
+  function sampleColumn(t, name, max) {
     max = max || 500;
     var out = [];
-    for (var i = 0; i < rows.length && out.length < max; i++) {
-      var v = num(rows[i][col]);
-      if (v !== null) out.push(v);
+    var c = ncol(t, name);
+    if (!c) return out;
+    for (var i = 0; i < t.rowCount && out.length < max; i++) {
+      var v = c[i];
+      if (v === v) out.push(v);
     }
     return out;
   }
 
   /**
-   * Assign an operating region to each row. Mutates rows by adding _region.
+   * Assign an operating region to each row.
+   * Legacy array input: mutates rows by adding _region (old contract).
+   * Log-table input: sets table.regions (same values, columnar home).
    * Needs RPM; TPS preferred, MAP as fallback for load detection.
    */
   function segmentRows(rows, mapResult) {
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    var mapCol = P66.columnFor(mapResult, 'MAP');
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var rpmC = ncol(t, P66.columnFor(mapResult, 'RPM'));
+    var tpsC = ncol(t, P66.columnFor(mapResult, 'TPS'));
+    var mapC = ncol(t, P66.columnFor(mapResult, 'MAP'));
 
+    var regions = new Array(n);
     // First pass: compute per-sample deltas for transient detection.
-    var prevTps = null, prevMap = null;
-    rows.forEach(function (row) {
-      var rpm = rpmCol ? num(row[rpmCol]) : null;
-      var tps = tpsCol ? num(row[tpsCol]) : null;
-      var map = mapCol ? num(row[mapCol]) : null;
+    var prevTps = NaN, prevMap = NaN;
+    for (var i = 0; i < n; i++) {
+      var rpm = rpmC ? rpmC[i] : NaN;
+      var tps = tpsC ? tpsC[i] : NaN;
+      var map = mapC ? mapC[i] : NaN;
 
       var region = 'cruise'; // default
       var isTransient = false;
-      if (tps !== null && prevTps !== null && Math.abs(tps - prevTps) >= 8) isTransient = true;
-      if (map !== null && prevMap !== null && Math.abs(map - prevMap) >= 8) isTransient = true;
+      if (tps === tps && prevTps === prevTps && Math.abs(tps - prevTps) >= 8) isTransient = true;
+      if (map === map && prevMap === prevMap && Math.abs(map - prevMap) >= 8) isTransient = true;
 
-      if (rpm === null) {
+      if (rpm !== rpm) {
         region = 'cruise';
       } else if (isTransient) {
         region = 'transient';
-      } else if (tps !== null && tps >= 78) {
+      } else if (tps === tps && tps >= 78) {
         region = 'wot';
-      } else if (rpm < 1100 && (tps === null || tps < 5) && (map === null || map < 50)) {
+      } else if (rpm < 1100 && (tps !== tps || tps < 5) && (map !== map || map < 50)) {
         region = 'idle';
       } else {
         region = 'cruise';
       }
-      row._region = region;
+      regions[i] = region;
       prevTps = tps;
       prevMap = map;
-    });
+    }
+    if (P66.isLogTable(rows)) {
+      rows.regions = regions;
+    } else {
+      // Legacy contract: _region lands on the caller's row objects.
+      var src = Array.isArray(rows) ? rows : (rows && rows.rows) || [];
+      for (var k = 0; k < n && k < src.length; k++) {
+        if (src[k] && typeof src[k] === 'object') src[k]._region = regions[k];
+      }
+    }
     return rows;
   }
 
@@ -89,10 +112,19 @@
    *      reasons unrelated to the VE cell. Transient rows are excluded.
    *
    * Returns { rows, gatedWarmup, gatedTransient, ectAvailable, warmNote }.
-   * A null ECT value on a row is treated as unknown (row kept): the gate
+   * `rows` keeps the input's shape: a filtered log table for table input,
+   * the kept original row objects for legacy array input.
+   * A missing ECT value on a row is treated as unknown (row kept): the gate
    * targets the known-cold warmup period, not sensor dropouts mid-log.
    */
   var WARM_F = 160;
+
+  // Idle-VE entry convention (stock-calibration "Idle VE Possible" scalars:
+  // 1450 RPM, ~2% TPS, 2 MPH). The PCM runs the Idle VE table (not Main VE)
+  // when these hold. TPS/VSS channels are optional — without them the test
+  // falls back to RPM-only. Shared by extractFeatures (isIdle) and
+  // analyzeFuelTrims (per-cell idle fraction).
+  var IDLE_VE_RPM_MAX = 1450, IDLE_VE_TPS_MAX = 2, IDLE_VE_VSS_MAX = 3;
 
   /**
    * Warmup threshold for the ECT column, without trusting a unit label.
@@ -103,11 +135,13 @@
    * the session max — the rising cold-start edge is what pollutes trims.
    * Returns { threshold, label } or null when no ECT samples exist.
    */
-  function ectWarmThreshold(rows, ectCol) {
+  function ectWarmThreshold(t, ectName) {
+    var c = ncol(t, ectName);
+    if (!c) return null;
     var max = -Infinity, n = 0;
-    for (var i = 0; i < rows.length; i++) {
-      var v = num(rows[i][ectCol]);
-      if (v === null) continue;
+    for (var i = 0; i < t.rowCount; i++) {
+      var v = c[i];
+      if (v !== v) continue;
       n++;
       if (v > max) max = v;
     }
@@ -116,23 +150,39 @@
     return { threshold: max - 10, label: 'within 10° of session max (' + Math.round(max) + '°)' };
   }
 
-  function qualityRows(rows, mapResult) {
-    var ectCol = P66.columnFor(mapResult, 'ECT');
-    var wt = ectCol ? ectWarmThreshold(rows, ectCol) : null;
-    var kept = [], gatedWarmup = 0, gatedTransient = 0;
-    rows.forEach(function (row) {
-      if ((row._region || '') === 'transient') { gatedTransient++; return; }
-      if (wt) {
-        var ect = num(row[ectCol]);
-        if (ect !== null && ect < wt.threshold) { gatedWarmup++; return; }
+  function qualityRows(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var ectName = P66.columnFor(mapResult, 'ECT');
+    // Optional features: the keep() predicate then reads the precomputed
+    // isTransient/isWarm columns instead of re-scanning regions and ECT.
+    var feats = featuresFor(t, mapResult, features);
+    var wt = feats.warmThreshold;
+    var gatedWarmup = 0, gatedTransient = 0;
+    var keptIndex = []; // keptIndex[j] = original row i of kept row j
+    function keep(i) {
+      if (feats.isTransient[i]) { gatedTransient++; return false; }
+      if (!feats.isWarm[i]) { gatedWarmup++; return false; }
+      keptIndex.push(i);
+      return true;
+    }
+    var kept;
+    if (P66.isLogTable(rows)) {
+      kept = P66.filterTable(t, keep);
+    } else {
+      // Legacy contract: the kept ORIGINAL row objects, in order.
+      var src = Array.isArray(rows) ? rows : (rows && rows.rows) || [];
+      kept = [];
+      for (var i = 0; i < n; i++) {
+        if (keep(i) && i < src.length) kept.push(src[i]);
       }
-      kept.push(row);
-    });
+    }
     return {
       rows: kept,
+      keptIndex: keptIndex,
       gatedWarmup: gatedWarmup,
       gatedTransient: gatedTransient,
-      ectAvailable: !!ectCol,
+      ectAvailable: !!ectName,
       warmNote: wt
         ? 'Excluded ' + gatedWarmup + ' cold row(s) below ' + wt.label +
           ' and ' + gatedTransient + ' transient row(s).'
@@ -141,62 +191,327 @@
     };
   }
 
+  // ---- single-pass feature extraction ---------------------------------
+  //
+  // P66.extractFeatures(table, mapResult) loops over the log's samples ONCE
+  // and computes every per-sample derived column the analyze* reductions
+  // share, so each analyzer becomes a cheap reduction over these
+  // precomputed columns instead of re-scanning the log for the same
+  // quantities. analyzeSession() extracts once and hands the feature
+  // object to every analyze* function as an optional third argument;
+  // a direct analyze*() call without features builds them on the spot
+  // (see featuresFor below).
+
+  // Drive-segment ids for the `segmentId` column (js/segments.js vocabulary).
+  var SEGMENT_IDS = { idle: 0, cruise: 1, wot: 2, decel: 3, other: 4 };
+
+  // Fallback mirror of P66.classifySegment (js/segments.js) for contexts
+  // where segments.js isn't loaded (node tests that only eval analyzer.js).
+  // Thresholds must match segments.js exactly; tools/features-test.js
+  // asserts the two agree on a sweep of inputs whenever both are present.
+  var SEG_IDLE_RPM_MAX = 1450, SEG_IDLE_TPS_MAX = 2, SEG_IDLE_VSS_MAX = 3;
+  var SEG_WOT_TPS_MIN = 70;
+  var SEG_DECEL_TPS_MAX = 2, SEG_DECEL_RPM_MIN = 1500, SEG_DECEL_VSS_MIN = 10;
+  function classifySegmentLocal(rpm, tps, vss) {
+    if (rpm === null || tps === null || vss === null) return 'other';
+    if (rpm < SEG_IDLE_RPM_MAX && tps < SEG_IDLE_TPS_MAX && vss < SEG_IDLE_VSS_MAX) return 'idle';
+    if (tps > SEG_WOT_TPS_MIN) return 'wot';
+    if (tps < SEG_DECEL_TPS_MAX && rpm > SEG_DECEL_RPM_MIN && vss > SEG_DECEL_VSS_MIN) return 'decel';
+    if (vss > SEG_IDLE_VSS_MAX && tps >= SEG_IDLE_TPS_MAX && tps <= SEG_WOT_TPS_MIN) return 'cruise';
+    return 'other';
+  }
+
+  /**
+   * P66.extractFeatures(table, mapResult)
+   *
+   * Single pass over all rows. Returns a feature object:
+   *
+   *   {
+   *     table, rowCount,
+   *     region:      [String]  per-sample operating region from the
+   *                             segmentRows algorithm: 'idle' | 'cruise' |
+   *                             'transient' | 'wot'. Transient = |dTPS| >= 8%
+   *                             or |dMAP| >= 8 kPa vs the previous sample
+   *                             (both samples present); WOT = TPS >= 78%;
+   *                             idle = RPM < 1100, TPS < 5% (or missing),
+   *                             MAP < 50 kPa (or missing); else 'cruise'.
+   *                             Missing RPM classifies 'cruise'.
+   *     isTransient: [Boolean] region === 'transient'. Rows with missing
+   *                             RPM never count as transient (they classify
+   *                             'cruise'), exactly like segmentRows.
+   *     segmentId:   Uint8Array drive-segment id per sample, from the
+   *                             js/segments.js classifySegment logic:
+   *                             0 idle (RPM<1450, TPS<2%, VSS<3),
+   *                             1 cruise (VSS>3, TPS 2-70%),
+   *                             2 wot (TPS>70%),
+   *                             3 decel (TPS<2%, RPM>1500, VSS>10),
+   *                             4 other (incl. any missing RPM/TPS/VSS).
+   *                             Priority: idle > wot > decel > cruise.
+   *     gear:       Uint8Array  inferred gear, 0 = unknown, else 1-4.
+   *                             Relocated verbatim from analyzeTransmission:
+   *                             4L60E RPM-per-MPH band centers 136 / 72 /
+   *                             44.5 / 31, nearest-center wins, rejected
+   *                             when the ratio is outside 12-220 or farther
+   *                             than 28% from the winning center, and a new
+   *                             gear must persist 3 consecutive samples
+   *                             (debounce). Samples with missing RPM/VSS,
+   *                             VSS < 2, or RPM < 400 keep the previous gear.
+   *     ratio:      [Number]  RPM-per-MPH per sample (float64, round2),
+   *                             NaN when unknown.
+   *     vssToMph, vssUnit, cruiseRatioMedian:
+   *                             VSS unit auto-detect, relocated verbatim:
+   *                             median RPM/VSS over light-cruise samples
+   *                             (TPS 8-35% or missing, |dVSS| < 1.5,
+   *                             1200 < RPM < 2800, VSS >= 5); median < 25
+   *                             means the log is in KPH (x0.621371).
+   *     isIdle:     [Boolean] PCM Idle-VE entry convention:
+   *                             RPM < 1450 AND (TPS missing or < 2%) AND
+   *                             (VSS missing or < 3). Same test
+   *                             analyzeFuelTrims uses for idleFraction.
+   *     isWarm:     [Boolean] ECT at/above the warmup threshold. The
+   *                             threshold is ectWarmThreshold(): 160 F when
+   *                             the session ECT max exceeds 140, else
+   *                             (session max - 10). Missing ECT channel or
+   *                             missing cell counts as warm (the gate
+   *                             targets the known-cold warmup period, not
+   *                             sensor dropouts).
+   *     warmThreshold: { threshold, label } | null (null = no ECT channel).
+   *     engineOn:   [Boolean] RPM present and > 400 (cranking threshold).
+   *     columns:    { rpm, tps, map, vss, ect } resolved channel names.
+   *   }
+   *
+   * Missing channels: every derived column degrades gracefully (NaN-safe);
+   * gear/ratio need RPM+VSS and stay unknown without them.
+   */
+  function extractFeatures(input, mapResult) {
+    var t = P66.asTable(input);
+    var n = t ? t.rowCount : 0;
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var tpsName = P66.columnFor(mapResult, 'TPS');
+    var mapName = P66.columnFor(mapResult, 'MAP');
+    var vssName = P66.columnFor(mapResult, 'VSS');
+    var ectName = P66.columnFor(mapResult, 'ECT');
+    var rpmC = ncol(t, rpmName);
+    var tpsC = ncol(t, tpsName);
+    var mapC = ncol(t, mapName);
+    var vssC = ncol(t, vssName);
+    var ectC = ncol(t, ectName);
+
+    // ECT warmup threshold (the same ectWarmThreshold the gating code uses).
+    var wt = ectName ? ectWarmThreshold(t, ectName) : null;
+
+    // --- VSS unit auto-detect (relocated verbatim from analyzeTransmission)
+    var cruiseRatios = [];
+    var prevVss = NaN;
+    for (var i = 0; i < n; i++) {
+      var rpm0 = rpmC ? rpmC[i] : NaN, vss0 = vssC ? vssC[i] : NaN;
+      var tps0 = tpsC ? tpsC[i] : NaN;
+      if (rpm0 !== rpm0 || vss0 !== vss0 || vss0 < 5) { prevVss = vss0; continue; }
+      var dvss = (prevVss === prevVss && vss0 === vss0) ? Math.abs(vss0 - prevVss) : 99;
+      if ((tps0 !== tps0 || (tps0 >= 8 && tps0 <= 35)) && dvss < 1.5 && rpm0 > 1200 && rpm0 < 2800) {
+        cruiseRatios.push(rpm0 / vss0);
+      }
+      prevVss = vss0;
+    }
+    cruiseRatios.sort(function (a, b) { return a - b; });
+    var medCruise = cruiseRatios.length ? cruiseRatios[Math.floor(cruiseRatios.length / 2)] : null;
+    var vssToMph = (medCruise !== null && medCruise < 25) ? 0.621371 : 1;
+    var vssUnit = vssToMph < 1 ? 'kph->mph' : 'mph';
+
+    function gearOf(ratio) {
+      if (ratio === null || ratio > 220 || ratio < 12) return null;
+      var best = null, bestD = Infinity;
+      for (var g = 0; g < 4; g++) {
+        var d = Math.abs(ratio - TRANS_GEAR_CENTERS[g]);
+        if (d < bestD) { bestD = d; best = g + 1; }
+      }
+      // Reject ambiguous midpoints (converter in transition).
+      var lo = TRANS_GEAR_CENTERS[best - 1];
+      if (bestD > lo * 0.28) return null;
+      return best;
+    }
+
+    var classify = (typeof P66.classifySegment === 'function')
+      ? P66.classifySegment : classifySegmentLocal;
+
+    // When the table was already segmented (analyzeSession segments before
+    // extracting), reuse those regions instead of recomputing them — same
+    // values, one fewer pass over the samples.
+    var preRegions = (t && t.regions && t.regions.length === n) ? t.regions : null;
+
+    var region = new Array(n);
+    var isTransient = new Array(n);
+    var segmentId = new Uint8Array(n);
+    var gear = new Uint8Array(n); // 0 = unknown
+    var ratio = new Array(n);     // float64, NaN = unknown
+    var isIdle = new Array(n);
+    var isWarm = new Array(n);
+    var engineOn = new Array(n);
+
+    // --- the single pass ---
+    var prevTps = NaN, prevMap = NaN;
+    var candGear = null, candCount = 0, curGear = null;
+    for (var s = 0; s < n; s++) {
+      var rpm = rpmC ? rpmC[s] : NaN;
+      var tps = tpsC ? tpsC[s] : NaN;
+      var map = mapC ? mapC[s] : NaN;
+      var vss = vssC ? vssC[s] : NaN;
+      var ect = ectC ? ectC[s] : NaN;
+
+      // Operating region — the segmentRows algorithm, verbatim. Skipped
+      // when the table already carries regions (see preRegions above).
+      var rg;
+      if (preRegions) {
+        rg = preRegions[s] || 'cruise';
+      } else {
+        var moved = false;
+        if (tps === tps && prevTps === prevTps && Math.abs(tps - prevTps) >= 8) moved = true;
+        if (map === map && prevMap === prevMap && Math.abs(map - prevMap) >= 8) moved = true;
+        rg = 'cruise'; // default
+        if (rpm !== rpm) {
+          rg = 'cruise';
+        } else if (moved) {
+          rg = 'transient';
+        } else if (tps === tps && tps >= 78) {
+          rg = 'wot';
+        } else if (rpm < 1100 && (tps !== tps || tps < 5) && (map !== map || map < 50)) {
+          rg = 'idle';
+        }
+      }
+      region[s] = rg;
+      isTransient[s] = (rg === 'transient');
+
+      // Drive segment (js/segments.js vocabulary); NaN -> null = 'other'.
+      segmentId[s] = SEGMENT_IDS[classify(nn(rpm), nn(tps), nn(vss))];
+
+      // PCM Idle-VE entry convention (stock "Idle VE Possible" scalars).
+      isIdle[s] = rpm === rpm && rpm < IDLE_VE_RPM_MAX &&
+        (tps !== tps || tps < IDLE_VE_TPS_MAX) &&
+        (vss !== vss || vss < IDLE_VE_VSS_MAX);
+
+      // Warmup: unknown ECT (no channel, or a missing cell) counts as warm.
+      isWarm[s] = !(wt && ect === ect && ect < wt.threshold);
+
+      engineOn[s] = rpm === rpm && rpm > 400;
+
+      // Gear inference — relocated verbatim from analyzeTransmission
+      // (Uint8Array storage: 0 = the old null).
+      if (rpm !== rpm || vss !== vss || vss < 2 || rpm < 400) {
+        gear[s] = curGear || 0; ratio[s] = NaN; candGear = null; candCount = 0;
+      } else {
+        var rto = rpm / (vss * vssToMph);
+        ratio[s] = round2(rto);
+        var gg = gearOf(rto);
+        if (gg === curGear) { candGear = null; candCount = 0; }
+        else if (gg === candGear) {
+          if (++candCount >= TRANS_CONFIRM) { curGear = gg; candGear = null; candCount = 0; }
+        } else { candGear = gg; candCount = gg === null ? 0 : 1; }
+        gear[s] = curGear || 0;
+      }
+
+      prevTps = tps;
+      prevMap = map;
+    }
+
+    return {
+      table: t,
+      rowCount: n,
+      region: region,
+      isTransient: isTransient,
+      segmentId: segmentId,
+      gear: gear,
+      ratio: ratio,
+      isIdle: isIdle,
+      isWarm: isWarm,
+      engineOn: engineOn,
+      vssToMph: vssToMph,
+      vssUnit: vssUnit,
+      cruiseRatioMedian: medCruise,
+      warmThreshold: wt,
+      columns: { rpm: rpmName, tps: tpsName, map: mapName, vss: vssName, ect: ectName }
+    };
+  }
+
+  /**
+   * Resolve the feature object an analyze* reduction runs on.
+   *
+   * Caller-supplied features (analyzeSession extracts once and passes them
+   * in) are used as-is. A direct analyze*() call without features builds
+   * them on the spot — but keeps the legacy region source: P66.regionAt()
+   * (pre-segmented regions when the caller segmented first, 'cruise'
+   * everywhere otherwise), exactly what the pre-refactor loops read.
+   */
+  function featuresFor(t, mapResult, features) {
+    var n = t ? t.rowCount : 0;
+    if (features && features.table === t && features.rowCount === n) return features;
+    var f = extractFeatures(t, mapResult);
+    var region = new Array(n), trans = new Array(n);
+    for (var i = 0; i < n; i++) {
+      var r = P66.regionAt(t, i);
+      region[i] = r;
+      trans[i] = (r === 'transient');
+    }
+    f.region = region;
+    f.isTransient = trans;
+    return f;
+  }
+
   /**
    * Fuel trim bias per RPM x MAP cell.
    * Combined trim = STFT + LTFT (percent), averaged across banks.
    * Trim channels are auto-normalized (percent / multiplier / GM 128-count).
    * Only warmed-up, steady-state rows are used (see qualityRows).
    */
-  function analyzeFuelTrims(rows, mapResult) {
+  function analyzeFuelTrims(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var feats = featuresFor(t, mapResult, features);
     var banks = P66.fuelTrimBanks(mapResult);
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var mapCol = P66.columnFor(mapResult, 'MAP');
-    if (!banks.length || !rpmCol || !mapCol) {
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var mapName = P66.columnFor(mapResult, 'MAP');
+    var rpmC0 = ncol(t, rpmName);
+    var mapC0 = ncol(t, mapName);
+    if (!banks.length || !rpmC0 || !mapC0) {
       return { available: false, reason: 'Need STFT/LTFT, RPM and MAP channels.' };
     }
     // Sample-quality gating: cold and transient rows do not reflect the VE
     // table, so they are excluded before any averaging happens.
-    var q = qualityRows(rows, mapResult);
-    rows = q.rows;
-    // Idle-VE detection: the PCM runs the Idle VE table (not Main VE) when
-    // idle entry conditions hold. Thresholds below are the stock-calibration
-    // entry values ("Idle VE Possible" scalars: 1450 RPM, ~2% TPS, 2 MPH).
-    // TPS/VSS channels are optional — without them we fall back to RPM-only.
-    var IDLE_RPM_MAX = 1450, IDLE_TPS_MAX = 2, IDLE_VSS_MAX = 3;
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    var vssCol = P66.columnFor(mapResult, 'VSS');
+    var q = qualityRows(t, mapResult, feats);
+    var gt = P66.asTable(q.rows);
+    var keptIndex = q.keptIndex;
+    var rpmC = ncol(gt, rpmName);
+    var mapC = ncol(gt, mapName);
     // Detect each trim column's encoding once.
     var styles = banks.map(function (b) {
       return {
-        stft: b.stft ? P66.detectTrimStyle(sampleColumn(rows, b.stft)) : 'percent',
-        ltft: b.ltft ? P66.detectTrimStyle(sampleColumn(rows, b.ltft)) : 'percent'
+        stft: b.stft ? P66.detectTrimStyle(sampleColumn(gt, b.stft)) : 'percent',
+        ltft: b.ltft ? P66.detectTrimStyle(sampleColumn(gt, b.ltft)) : 'percent'
       };
+    });
+    var trimCols = banks.map(function (b) {
+      return { stft: ncol(gt, b.stft), ltft: ncol(gt, b.ltft) };
     });
     var cells = {}; // "rpmBin|mapBin" -> { count, sum, sumSq, idle }
     var totalAbs = 0, totalN = 0;
-    rows.forEach(function (row) {
-      var rpm = num(row[rpmCol]);
-      var map = num(row[mapCol]);
-      if (rpm === null || map === null) return;
+    for (var i = 0; i < gt.rowCount; i++) {
+      var rpm = rpmC[i];
+      var map = mapC[i];
+      if (rpm !== rpm || map !== map) continue;
       var bankTrims = [];
-      banks.forEach(function (b, bi) {
-        var stft = b.stft ? P66.trimToPct(num(row[b.stft]), styles[bi].stft) : 0;
-        var ltft = b.ltft ? P66.trimToPct(num(row[b.ltft]), styles[bi].ltft) : 0;
+      for (var bi = 0; bi < banks.length; bi++) {
+        var tc = trimCols[bi];
+        var stft = tc.stft ? P66.trimToPct(nn(tc.stft[i]), styles[bi].stft) : 0;
+        var ltft = tc.ltft ? P66.trimToPct(nn(tc.ltft[i]), styles[bi].ltft) : 0;
         bankTrims.push(stft + ltft);
-      });
-      var combined = bankTrims.reduce(function (a, t) { return a + t; }, 0) / bankTrims.length;
+      }
+      var combined = bankTrims.reduce(function (a, x) { return a + x; }, 0) / bankTrims.length;
       var key = rpmBin(rpm) + '|' + mapBin(map);
       var c = cells[key] || (cells[key] = { count: 0, sum: 0, sumSq: 0, idle: 0 });
       c.count++; c.sum += combined; c.sumSq += combined * combined;
-      // Was the PCM on the Idle VE table for this sample? Entry conditions
-      // from the calibration; missing TPS/VSS channels fall back to RPM-only.
-      var tps = tpsCol ? num(row[tpsCol]) : null;
-      var vss = vssCol ? num(row[vssCol]) : null;
-      if (rpm < IDLE_RPM_MAX &&
-          (tps === null || tps < IDLE_TPS_MAX) &&
-          (vss === null || vss < IDLE_VSS_MAX)) c.idle++;
+      // Was the PCM on the Idle VE table for this sample? Precomputed in
+      // the feature pass (same entry conditions over the same values).
+      if (feats.isIdle[keptIndex[i]]) c.idle++;
       totalAbs += Math.abs(combined); totalN++;
-    });
+    }
     var cellList = Object.keys(cells).map(function (key) {
       var parts = key.split('|');
       var c = cells[key];
@@ -245,13 +560,16 @@
    */
   var KR_RAW_TO_DEG = 0.175781;
 
-  function detectKrScale(rows, krCol) {
+  function detectKrScale(t, krName) {
+    var c = ncol(t, krName);
     var seen = 0, allInt = true;
-    for (var i = 0; i < rows.length && seen < 2000; i++) {
-      var v = num(rows[i][krCol]);
-      if (v === null || v <= 0) continue;
-      seen++;
-      if (v !== Math.round(v)) { allInt = false; break; }
+    if (c) {
+      for (var i = 0; i < t.rowCount && seen < 2000; i++) {
+        var v = c[i];
+        if (v !== v || v <= 0) continue;
+        seen++;
+        if (v !== Math.round(v)) { allInt = false; break; }
+      }
     }
     if (seen > 0 && allInt) return { scale: KR_RAW_TO_DEG, rawCounts: true };
     return { scale: 1, rawCounts: false };
@@ -269,26 +587,32 @@
    *   tipOut — throttle closed during the event (tpsDrop > 10). Classic
    *     drivetrain-noise false knock; never sized into a spark suggestion.
    */
-  function analyzeKnock(rows, mapResult) {
-    var krCol = P66.columnFor(mapResult, 'KR');
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var mapCol = P66.columnFor(mapResult, 'MAP');
-    if (!krCol) return { available: false, reason: 'Need KR (knock retard) channel.' };
+  function analyzeKnock(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var feats = featuresFor(t, mapResult, features);
+    var krName = P66.columnFor(mapResult, 'KR');
+    var tpsName = P66.columnFor(mapResult, 'TPS');
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var mapName = P66.columnFor(mapResult, 'MAP');
+    var krC = ncol(t, krName);
+    var tpsC = ncol(t, tpsName);
+    var rpmC = ncol(t, rpmName);
+    var mapC = ncol(t, mapName);
+    if (!krC) return { available: false, reason: 'Need KR (knock retard) channel.' };
 
-    var krScale = detectKrScale(rows, krCol);
+    var krScale = detectKrScale(t, krName);
 
     // Group consecutive KR-active rows into events.
     var events = [];
     var cur = null;
-    rows.forEach(function (row, i) {
-      var krRaw = num(row[krCol]);
-      var kr = krRaw === null ? null : krRaw * krScale.scale;
-      if (kr !== null && kr > 0.5) {
+    for (var i = 0; i < t.rowCount; i++) {
+      var krRaw = krC[i];
+      var kr = (krRaw !== krRaw) ? NaN : krRaw * krScale.scale;
+      if (kr === kr && kr > 0.5) {
         if (!cur) {
           cur = {
             startIdx: i, endIdx: i, samples: 0, peakKR: 0, sumKR: 0,
-            regions: {}, tpsStart: tpsCol ? num(row[tpsCol]) : null, tpsEnd: null
+            regions: {}, tpsStart: tpsC ? nn(tpsC[i]) : null, tpsEnd: null
           };
         }
         cur.endIdx = i;
@@ -297,17 +621,17 @@
         if (kr > cur.peakKR) {
           cur.peakKR = kr;
           // Position of the worst knock: what the spark patcher retards.
-          cur.peakRpm = rpmCol !== null ? num(row[rpmCol]) : null;
-          cur.peakMap = mapCol !== null ? num(row[mapCol]) : null;
+          cur.peakRpm = rpmC ? nn(rpmC[i]) : null;
+          cur.peakMap = mapC ? nn(mapC[i]) : null;
         }
-        var region = row._region || 'cruise';
+        var region = feats.region[i];
         cur.regions[region] = (cur.regions[region] || 0) + 1;
-        cur.tpsEnd = tpsCol ? num(row[tpsCol]) : null;
+        cur.tpsEnd = tpsC ? nn(tpsC[i]) : null;
       } else if (cur) {
         events.push(cur);
         cur = null;
       }
-    });
+    }
     if (cur) events.push(cur);
 
     events.forEach(function (e) {
@@ -340,8 +664,8 @@
       available: true,
       knockSamples: active,
       knockEvents: events.length,
-      totalSamples: rows.length,
-      knockPct: rows.length ? round2(100 * active / rows.length) : 0,
+      totalSamples: t.rowCount,
+      knockPct: t.rowCount ? round2(100 * active / t.rowCount) : 0,
       maxKR: round2(maxKR),
       avgKRWhenActive: active ? round2(sumKR / active) : 0,
       krUnits: 'degrees',             // report is always normalized to degrees
@@ -363,8 +687,10 @@
   }
 
   // Normalize an AFR/lambda reading to lambda (gasoline stoich 14.7).
+  // NaN (missing) falls through the comparisons to null, same as the
+  // old null input did.
   function toLambda(v) {
-    if (v === null) return null;
+    if (v === null || v === undefined) return null;
     if (v > 5) return v / 14.7; // looks like AFR
     if (v > 0.3 && v < 2.5) return v; // looks like lambda
     return null;
@@ -373,25 +699,27 @@
   /**
    * Commanded vs actual lambda error.
    */
-  function analyzeLambda(rows, mapResult) {
-    var cmdCol = P66.columnFor(mapResult, 'CMD_LAMBDA');
-    var wbCol = P66.columnFor(mapResult, 'WB_LAMBDA');
-    if (!cmdCol || !wbCol) {
+  function analyzeLambda(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var feats = featuresFor(t, mapResult, features);
+    var cmdC = ncol(t, P66.columnFor(mapResult, 'CMD_LAMBDA'));
+    var wbC = ncol(t, P66.columnFor(mapResult, 'WB_LAMBDA'));
+    if (!cmdC || !wbC) {
       return { available: false, reason: 'Need commanded + wideband lambda/AFR channels.' };
     }
     var errors = [];
     var byRegion = {};
     REGIONS.forEach(function (r) { byRegion[r] = { n: 0, sumAbs: 0 }; });
-    rows.forEach(function (row) {
-      var cmd = toLambda(num(row[cmdCol]));
-      var wb = toLambda(num(row[wbCol]));
-      if (cmd === null || wb === null) return;
+    for (var i = 0; i < t.rowCount; i++) {
+      var cmd = toLambda(cmdC[i]);
+      var wb = toLambda(wbC[i]);
+      if (cmd === null || wb === null) continue;
       var err = wb - cmd; // positive = lean vs commanded
       errors.push(err);
-      var region = row._region || 'cruise';
+      var region = feats.region[i];
       byRegion[region].n++;
       byRegion[region].sumAbs += Math.abs(err);
-    });
+    }
     if (!errors.length) return { available: false, reason: 'No valid lambda sample pairs.' };
     var sumAbs = errors.reduce(function (a, e) { return a + Math.abs(e); }, 0);
     var within3 = errors.filter(function (e) { return Math.abs(e) <= 0.03; }).length;
@@ -416,42 +744,55 @@
    * and a WOT richness safety check.
    * Thresholds in mV: <300 lean, 300-600 switching, >600 rich.
    */
-  function analyzeNarrowband(rows, mapResult) {
-    var b1Col = P66.columnFor(mapResult, 'O2_B1');
-    var b2Col = P66.columnFor(mapResult, 'O2_B2');
-    var soloCol = P66.columnFor(mapResult, 'O2');
-    var banks = [];
-    if (b1Col) banks.push({ name: 'bank1', col: b1Col });
-    if (b2Col) banks.push({ name: 'bank2', col: b2Col });
-    if (!banks.length && soloCol) banks.push({ name: 'single', col: soloCol });
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var mapCol = P66.columnFor(mapResult, 'MAP');
-    if (!banks.length || !rpmCol || !mapCol) {
+  function analyzeNarrowband(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var feats = featuresFor(t, mapResult, features);
+    var b1Name = P66.columnFor(mapResult, 'O2_B1');
+    var b2Name = P66.columnFor(mapResult, 'O2_B2');
+    var soloName = P66.columnFor(mapResult, 'O2');
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var mapName = P66.columnFor(mapResult, 'MAP');
+    var bankDefs = [];
+    if (b1Name) bankDefs.push({ name: 'bank1', sig: b1Name });
+    if (b2Name) bankDefs.push({ name: 'bank2', sig: b2Name });
+    if (!bankDefs.length && soloName) bankDefs.push({ name: 'single', sig: soloName });
+    if (!bankDefs.length || !rpmName || !mapName) {
       return { available: false, reason: 'Need O2 sensor (mV), RPM and MAP channels.' };
     }
 
     // Same sample-quality gating as fuel trims: a cold O2 sensor reads lean
     // and tells you nothing about the VE table.
-    var nbq = qualityRows(rows, mapResult);
-    rows = nbq.rows;
+    var nbq = qualityRows(t, mapResult, feats);
+    var gt = P66.asTable(nbq.rows);
+    var keptIndex = nbq.keptIndex;
+    var grpmC = ncol(gt, rpmName);
+    var gmapC = ncol(gt, mapName);
+    var gbanks = bankDefs.map(function (b) {
+      return { name: b.name, col: ncol(gt, b.sig) };
+    });
 
     // Per-cell bias
     var cells = {};
-    rows.forEach(function (row) {
-      var rpm = num(row[rpmCol]);
-      var map = num(row[mapCol]);
-      if (rpm === null || map === null) return;
-      var mvs = banks.map(function (b) { return num(row[b.col]); })
-        .filter(function (v) { return v !== null; });
-      if (!mvs.length) return;
-      var avgMv = mvs.reduce(function (a, v) { return a + v; }, 0) / mvs.length;
+    for (var i = 0; i < gt.rowCount; i++) {
+      var rpm = grpmC[i];
+      var map = gmapC[i];
+      if (rpm !== rpm || map !== map) continue;
+      var sum = 0, mvn = 0;
+      for (var bi = 0; bi < gbanks.length; bi++) {
+        var mv = gbanks[bi].col ? gbanks[bi].col[i] : NaN;
+        if (mv !== mv) continue;
+        mvn++;
+        sum += mv;
+      }
+      if (!mvn) continue;
+      var avgMv = sum / mvn;
       var key = rpmBin(rpm) + '|' + mapBin(map);
       var c = cells[key] || (cells[key] = { count: 0, sumMv: 0, rich: 0, lean: 0 });
       c.count++;
       c.sumMv += avgMv;
       if (avgMv > 600) c.rich++;
       else if (avgMv < 300) c.lean++;
-    });
+    }
     var cellList = Object.keys(cells).map(function (key) {
       var parts = key.split('|');
       var c = cells[key];
@@ -470,29 +811,29 @@
 
     // Cross-counts (sensor health): threshold crossings in closed-loop-ish rows.
     var STOICH_MV = 450;
-    var timeCol = P66.columnFor(mapResult, 'TIME');
-    var crossCounts = banks.map(function (b) {
-      var crossings = 0, samples = 0, prevAbove = null, firstT = null, lastT = null;
-      rows.forEach(function (row, i) {
-        var region = row._region || 'cruise';
-        if (region !== 'cruise' && region !== 'idle') return;
-        var v = num(row[b.col]);
-        if (v === null) return;
+    var timeC = ncol(gt, P66.columnFor(mapResult, 'TIME'));
+    var crossCounts = gbanks.map(function (b) {
+      var crossings = 0, samples = 0, prevAbove = null, firstT = NaN, lastT = NaN;
+      for (var k = 0; k < gt.rowCount; k++) {
+        var region = feats.region[keptIndex[k]];
+        if (region !== 'cruise' && region !== 'idle') continue;
+        var v = b.col ? b.col[k] : NaN;
+        if (v !== v) continue;
         samples++;
-        if (timeCol) {
-          var t = num(row[timeCol]);
-          if (t !== null) {
-            if (firstT === null) firstT = t;
-            lastT = t;
+        if (timeC) {
+          var tt = timeC[k];
+          if (tt === tt) {
+            if (firstT !== firstT) firstT = tt;
+            lastT = tt;
           }
         }
         var above = v > STOICH_MV;
         if (prevAbove !== null && above !== prevAbove) crossings++;
         prevAbove = above;
-      });
+      }
       var perMin = null;
       if (samples > 30) {
-        var minutes = (firstT !== null && lastT !== null && lastT > firstT)
+        var minutes = (firstT === firstT && lastT === lastT && lastT > firstT)
           ? (lastT - firstT) / 60
           : samples / 600; // fallback: assume ~10 Hz
         if (minutes > 0) perMin = round2(crossings / minutes);
@@ -505,20 +846,23 @@
     });
 
     // WOT richness safety check.
-    var wotMvs = [];
-    rows.forEach(function (row) {
-      if ((row._region || '') !== 'wot') return;
-      banks.forEach(function (b) {
-        var v = num(row[b.col]);
-        if (v !== null) wotMvs.push(v);
-      });
-    });
-    var wotCheck = { samples: wotMvs.length, status: 'no wot data' };
-    if (wotMvs.length >= 10) {
-      var wotAvg = wotMvs.reduce(function (a, v) { return a + v; }, 0) / wotMvs.length;
-      var wotRichPct = 100 * wotMvs.filter(function (v) { return v > 700; }).length / wotMvs.length;
+    var wotSum = 0, wotN = 0, wotRich = 0;
+    for (var w = 0; w < gt.rowCount; w++) {
+      if (feats.region[keptIndex[w]] !== 'wot') continue;
+      for (var wb2 = 0; wb2 < gbanks.length; wb2++) {
+        var wv = gbanks[wb2].col ? gbanks[wb2].col[w] : NaN;
+        if (wv !== wv) continue;
+        wotN++;
+        wotSum += wv;
+        if (wv > 700) wotRich++;
+      }
+    }
+    var wotCheck = { samples: wotN, status: 'no wot data' };
+    if (wotN >= 10) {
+      var wotAvg = wotSum / wotN;
+      var wotRichPct = 100 * wotRich / wotN;
       wotCheck = {
-        samples: wotMvs.length,
+        samples: wotN,
         avgMv: Math.round(wotAvg),
         pctRich: round2(wotRichPct),
         status: wotAvg > 700 ? 'rich (normal)' : (wotAvg > 550 ? 'marginal — verify fueling' : 'LEAN AT WOT — investigate immediately')
@@ -563,62 +907,69 @@
   var TIP_IN_REFRACTORY = 20; // min samples between counted events
   var TIP_IN_MIN_EVENTS = 5;  // minimum events before the tuner acts
 
-  function analyzeTipIn(rows, mapResult) {
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    var o2Col = P66.columnFor(mapResult, 'O2_B1') || P66.columnFor(mapResult, 'O2');
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var ectCol = P66.columnFor(mapResult, 'ECT');
-    if (!tpsCol || !o2Col) {
+  function analyzeTipIn(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var feats = featuresFor(t, mapResult, features);
+    var tpsName = P66.columnFor(mapResult, 'TPS');
+    var o2Name = P66.columnFor(mapResult, 'O2_B1') || P66.columnFor(mapResult, 'O2');
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var ectName = P66.columnFor(mapResult, 'ECT');
+    var tpsC = ncol(t, tpsName);
+    var o2C = ncol(t, o2Name);
+    var rpmC = ncol(t, rpmName);
+    var ectC = ncol(t, ectName);
+    if (!tpsC || !o2C) {
       return { available: false, reason: 'Need TPS and narrowband O2 channels.' };
     }
-    var warmThr = ectCol ? ectWarmThreshold(rows, ectCol) : null;
+    var warmThr = feats.warmThreshold;
+    var n = t.rowCount;
 
     var events = [];
-    var prevTps = null, lastEventIdx = -TIP_IN_REFRACTORY;
-    rows.forEach(function (row, i) {
-      var tps = num(row[tpsCol]);
-      if (tps === null) { prevTps = null; return; }
-      if (prevTps !== null && i - lastEventIdx >= TIP_IN_REFRACTORY) {
+    var prevTps = NaN, lastEventIdx = -TIP_IN_REFRACTORY;
+    for (var i = 0; i < n; i++) {
+      var tps = tpsC[i];
+      if (tps !== tps) { prevTps = NaN; continue; }
+      if (prevTps === prevTps && i - lastEventIdx >= TIP_IN_REFRACTORY) {
         var dtps = tps - prevTps;
         if (dtps >= TIP_IN_DTPS) {
           // Confirm a real stab, not a one-sample data glitch: the throttle
           // must stay open (>= +5%) for most of the next 5 samples.
           var sustained = 0;
-          for (var k = i + 1; k < Math.min(i + 6, rows.length); k++) {
-            var tk = num(rows[k][tpsCol]);
-            if (tk !== null && tk >= prevTps + 5) sustained++;
+          for (var k = i + 1; k < Math.min(i + 6, n); k++) {
+            var tk = tpsC[k];
+            if (tk === tk && tk >= prevTps + 5) sustained++;
           }
-          if (sustained < 3) { prevTps = tps; return; }
+          if (sustained < 3) { prevTps = tps; continue; }
           var minO2 = Infinity, o2n = 0;
-          for (var j = i; j < Math.min(i + TIP_IN_WINDOW, rows.length); j++) {
-            var o2 = num(rows[j][o2Col]);
-            if (o2 === null) continue;
+          for (var j = i; j < Math.min(i + TIP_IN_WINDOW, n); j++) {
+            var o2 = o2C[j];
+            if (o2 !== o2) continue;
             o2n++;
             if (o2 < minO2) minO2 = o2;
           }
-          var ect = ectCol ? num(row[ectCol]) : null;
+          var ect = ectC ? ectC[i] : NaN;
           events.push({
             index: i,
             dtps: round2(dtps),
             tpsFrom: round2(prevTps),
             tpsTo: round2(tps),
-            rpm: rpmCol ? num(row[rpmCol]) : null,
+            rpm: rpmC ? nn(rpmC[i]) : null,
             minO2: o2n ? Math.round(minO2) : null,
             leanSpike: o2n > 0 && minO2 < TIP_IN_LEAN_MV,
-            cold: ect !== null && warmThr !== null && ect < warmThr.threshold
+            cold: ect === ect && warmThr !== null && ect < warmThr.threshold
           });
           lastEventIdx = i;
         }
       }
       prevTps = tps;
-    });
+    }
 
     var lean = events.filter(function (e) { return e.leanSpike; });
     var warm = events.filter(function (e) { return !e.cold; });
     function avg(list, key) {
-      var s = 0, n = 0;
-      list.forEach(function (e) { if (e[key] !== null) { s += e[key]; n++; } });
-      return n ? Math.round(s / n) : null;
+      var s = 0, cnt = 0;
+      list.forEach(function (e) { if (e[key] !== null) { s += e[key]; cnt++; } });
+      return cnt ? Math.round(s / cnt) : null;
     }
     return {
       available: true,
@@ -656,29 +1007,35 @@
   var PE_LAMBDA_MAX = 0.95; // commanded lambda below this = PE active
   var PE_MIN_EPISODES = 3;  // minimum episodes before the tuner acts
 
-  function analyzePeEntry(rows, mapResult) {
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    var cmdCol = P66.columnFor(mapResult, 'CMD_LAMBDA');
-    if (!tpsCol) return { available: false, reason: 'Need TPS channel.' };
-    if (!cmdCol) {
+  function analyzePeEntry(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    // features accepted for a uniform analyze* signature; PE entry needs
+    // no derived columns — it reduces TPS + commanded lambda directly.
+    void features;
+    var tpsName = P66.columnFor(mapResult, 'TPS');
+    var cmdName = P66.columnFor(mapResult, 'CMD_LAMBDA');
+    var tpsC = ncol(t, tpsName);
+    var cmdC = ncol(t, cmdName);
+    if (!tpsC) return { available: false, reason: 'Need TPS channel.' };
+    if (!cmdC) {
       return { available: false, reason: 'Need commanded lambda/AFR channel.' };
     }
     var episodes = [];
     var cur = null;
-    rows.forEach(function (row, i) {
-      var tps = num(row[tpsCol]);
-      if (tps !== null && tps >= PE_TPS_MIN) {
+    for (var i = 0; i < t.rowCount; i++) {
+      var tps = tpsC[i];
+      if (tps === tps && tps >= PE_TPS_MIN) {
         if (!cur) cur = { startIdx: i, samples: 0, peAt: null };
         cur.samples++;
         if (cur.peAt === null) {
-          var lambda = P66.toLambda ? P66.toLambda(num(row[cmdCol])) : num(row[cmdCol]);
+          var lambda = toLambda(cmdC[i]);
           if (lambda !== null && lambda < PE_LAMBDA_MAX) cur.peAt = i;
         }
       } else if (cur) {
         if (cur.samples >= PE_EPISODE_MIN) episodes.push(cur);
         cur = null;
       }
-    });
+    }
     if (cur && cur.samples >= PE_EPISODE_MIN) episodes.push(cur);
 
     var engaged = episodes.filter(function (e) { return e.peAt !== null; });
@@ -729,95 +1086,59 @@
   var TRANS_HUNT_REVERSALS = 3;// gear-pair reversals in window = hunting
   var TRANS_HUNT_WINDOW = 300;  // samples (~45 s)
 
-  function analyzeTransmission(rows, mapResult) {
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var vssCol = P66.columnFor(mapResult, 'VSS');
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    if (!rpmCol || !vssCol) {
+  function analyzeTransmission(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var feats = featuresFor(t, mapResult, features);
+    var rpmC = ncol(t, P66.columnFor(mapResult, 'RPM'));
+    var vssC = ncol(t, P66.columnFor(mapResult, 'VSS'));
+    var tpsC = ncol(t, P66.columnFor(mapResult, 'TPS'));
+    if (!rpmC || !vssC) {
       return { available: false, reason: 'Need RPM and VSS (vehicle speed) channels.' };
     }
 
-    // Auto-detect VSS units: median RPM/VSS at light cruise should sit in
-    // the 4th-gear band (~31 in MPH, ~19 in KPH).
-    var cruiseRatios = [];
-    var prevVss = null;
-    rows.forEach(function (row) {
-      var rpm = num(row[rpmCol]), vss = num(row[vssCol]);
-      var tps = tpsCol ? num(row[tpsCol]) : null;
-      if (rpm === null || vss === null || vss < 5) { prevVss = vss; return; }
-      var dvss = (prevVss !== null && vss !== null) ? Math.abs(vss - prevVss) : 99;
-      if ((tps === null || (tps >= 8 && tps <= 35)) && dvss < 1.5 && rpm > 1200 && rpm < 2800) {
-        cruiseRatios.push(rpm / vss);
-      }
-      prevVss = vss;
-    });
-    cruiseRatios.sort(function (a, b) { return a - b; });
-    var medCruise = cruiseRatios.length ? cruiseRatios[Math.floor(cruiseRatios.length / 2)] : null;
-    var vssToMph = (medCruise !== null && medCruise < 25) ? 0.621371 : 1;
-    var vssUnit = vssToMph < 1 ? 'kph->mph' : 'mph';
+    // Gear inference now lives in P66.extractFeatures (single pass, shared
+    // with the other analyzers; the algorithm was relocated verbatim, only
+    // the storage changed: gear is a Uint8Array with 0 = the old null,
+    // ratio is a plain float64 Array with NaN = the old null).
+    var gears = feats.gear;
+    var ratios = feats.ratio;
+    var vssToMph = feats.vssToMph;
+    var vssUnit = feats.vssUnit;
+    var medCruise = feats.cruiseRatioMedian;
 
-    function gearOf(ratio) {
-      if (ratio === null || ratio > 220 || ratio < 12) return null;
-      var best = null, bestD = Infinity;
-      for (var g = 0; g < 4; g++) {
-        var d = Math.abs(ratio - TRANS_GEAR_CENTERS[g]);
-        if (d < bestD) { bestD = d; best = g + 1; }
-      }
-      // Reject ambiguous midpoints (converter in transition).
-      var lo = TRANS_GEAR_CENTERS[best - 1];
-      if (bestD > lo * 0.28) return null;
-      return best;
+    function colVal(c, i) {
+      if (!c) return null;
+      var v = c[i];
+      return v !== v ? null : v;
     }
-
-    // Per-sample gear with hysteresis: a new gear must persist
-    // TRANS_CONFIRM samples before it counts (debounces ratio noise).
-    var gears = new Array(rows.length).fill(null);
-    var ratios = new Array(rows.length).fill(null);
-    var candGear = null, candCount = 0, curGear = null;
-    rows.forEach(function (row, i) {
-      var rpm = num(row[rpmCol]);
-      var vss = num(row[vssCol]);
-      if (rpm === null || vss === null || vss < 2 || rpm < 400) {
-        gears[i] = curGear; ratios[i] = null; candGear = null; candCount = 0; return;
-      }
-      var ratio = rpm / (vss * vssToMph);
-      ratios[i] = round2(ratio);
-      var g = gearOf(ratio);
-      if (g === curGear) { candGear = null; candCount = 0; }
-      else if (g === candGear) {
-        if (++candCount >= TRANS_CONFIRM) { curGear = g; candGear = null; candCount = 0; }
-      } else { candGear = g; candCount = g === null ? 0 : 1; }
-      gears[i] = curGear;
-    });
-
-    function val(col, i) { return col ? num(rows[i][col]) : null; }
 
     // --- shift events -------------------------------------------------
     var shifts = [];
     var lastShiftIdx = -1000;
-    for (var i = TRANS_CONFIRM + 2; i < rows.length; i++) {
-      var g0 = gears[i - TRANS_CONFIRM - 1], g1 = gears[i];
-      if (g0 === null || g1 === null || g0 === g1) continue;
-      if (i - lastShiftIdx < 15) continue; // one event per shift
-      lastShiftIdx = i;
+    for (var si = TRANS_CONFIRM + 2; si < n; si++) {
+      var g0 = gears[si - TRANS_CONFIRM - 1], g1 = gears[si];
+      if (!g0 || !g1 || g0 === g1) continue;
+      if (si - lastShiftIdx < 15) continue; // one event per shift
+      lastShiftIdx = si;
       // rpmAt: pre-shift peak, measured BEFORE the transition begins so a
       // mid-shift flare cannot pollute its own baseline. Transition samples
       // live roughly in [i-6, i]; the flare window is [i-4, i].
       var rpmAt = null, mphAt = null, tpsAt = null, flare = 0;
-      for (var k = Math.max(0, i - 12); k < Math.max(0, i - 5); k++) {
-        var r = val(rpmCol, k);
+      for (var k = Math.max(0, si - 12); k < Math.max(0, si - 5); k++) {
+        var r = colVal(rpmC, k);
         if (r !== null && (rpmAt === null || r > rpmAt)) rpmAt = r;
       }
-      for (var m = Math.max(0, i - 4); m <= i; m++) {
-        var r2 = val(rpmCol, m);
+      for (var m = Math.max(0, si - 4); m <= si; m++) {
+        var r2 = colVal(rpmC, m);
         if (r2 !== null && rpmAt !== null && r2 - rpmAt > flare) flare = r2 - rpmAt;
-        if (m === i) {
-          var v = val(vssCol, m); mphAt = v === null ? null : round2(v * vssToMph);
-          tpsAt = val(tpsCol, m);
+        if (m === si) {
+          var v = colVal(vssC, m); mphAt = v === null ? null : round2(v * vssToMph);
+          tpsAt = colVal(tpsC, m);
         }
       }
       shifts.push({
-        index: i,
+        index: si,
         type: g1 > g0 ? 'upshift' : 'downshift',
         from: g0, to: g1,
         rpmAt: rpmAt, mphAt: mphAt, tpsAt: tpsAt,
@@ -840,17 +1161,18 @@
     var tccApplies = 0, tccReleases = 0, tccCycles = 0;
     var tccEvents = [];
     var lastTccIdx = -1000, lastTccType = null;
-    for (var t = 16; t < rows.length; t++) {
-      if (gears[t] === null || gears[t] < 3) continue;
-      if (gears[t] !== gears[t - 16]) continue; // gear must be constant
-      var tps = val(tpsCol, t);
-      var vss = val(vssCol, t);
-      if (tps !== null && tps > 45) continue;
-      if (vss === null || vss * vssToMph < 30) continue;
-      if (t - lastTccIdx < 40) continue; // one event per transition
+    for (var ti = 16; ti < n; ti++) {
+      var tgear = gears[ti];
+      if (!tgear || tgear < 3) continue;
+      if (tgear !== gears[ti - 16]) continue; // gear must be constant
+      var ttps = colVal(tpsC, ti);
+      var tvss = colVal(vssC, ti);
+      if (ttps !== null && ttps > 45) continue;
+      if (tvss === null || tvss * vssToMph < 30) continue;
+      if (ti - lastTccIdx < 40) continue; // one event per transition
       var rA = [], rB = [];
-      for (var a = t - 16; a < t - 8; a++) if (ratios[a] !== null) rA.push(ratios[a]);
-      for (var b = t - 8; b <= t; b++) if (ratios[b] !== null) rB.push(ratios[b]);
+      for (var a = ti - 16; a < ti - 8; a++) if (ratios[a] === ratios[a]) rA.push(ratios[a]);
+      for (var b = ti - 8; b <= ti; b++) if (ratios[b] === ratios[b]) rB.push(ratios[b]);
       if (rA.length < 5 || rB.length < 5) continue;
       rA.sort(function (x, y) { return x - y; });
       rB.sort(function (x, y) { return x - y; });
@@ -861,40 +1183,40 @@
       else if (step < -TRANS_TCC_STEP) type = 'release'; // ratio rose: converter unlocked
       if (type && type !== lastTccType) {
         if (type === 'apply') tccApplies++; else tccReleases++;
-        tccEvents.push({ index: t, type: type, gear: gears[t] });
-        lastTccIdx = t; lastTccType = type;
+        tccEvents.push({ index: ti, type: type, gear: gears[ti] || null });
+        lastTccIdx = ti; lastTccType = type;
       }
     }
     // Count lock/unlock pairs close together = TCC hunting.
-    for (var c = 1; c < tccEvents.length; c++) {
-      if (tccEvents[c].index - tccEvents[c - 1].index < TRANS_HUNT_WINDOW &&
-          tccEvents[c].type !== tccEvents[c - 1].type) tccCycles++;
+    for (var c2 = 1; c2 < tccEvents.length; c2++) {
+      if (tccEvents[c2].index - tccEvents[c2 - 1].index < TRANS_HUNT_WINDOW &&
+          tccEvents[c2].type !== tccEvents[c2 - 1].type) tccCycles++;
     }
 
     // --- kickdown: throttle stab followed by a downshift -----------------
     var kickdowns = [];
-    if (tpsCol) {
-      var prevTps = null;
-      rows.forEach(function (row, i) {
-        var tps = num(row[tpsCol]);
-        if (tps === null) { prevTps = null; return; }
-        if (prevTps !== null && tps - prevTps >= TRANS_KICK_DTPS && tps >= TRANS_KICK_TPS_MIN) {
+    if (tpsC) {
+      var prevTps = NaN;
+      for (var ki = 0; ki < n; ki++) {
+        var ktps = tpsC[ki];
+        if (ktps !== ktps) { prevTps = NaN; continue; }
+        if (prevTps === prevTps && ktps - prevTps >= TRANS_KICK_DTPS && ktps >= TRANS_KICK_TPS_MIN) {
           var found = null;
-          for (var j = i + 1; j < Math.min(i + 1 + TRANS_KICK_WINDOW, rows.length); j++) {
-            var ds = shifts.filter(function (s) { return s.index >= i && s.index <= j && s.type === 'downshift'; });
+          for (var j = ki + 1; j < Math.min(ki + 1 + TRANS_KICK_WINDOW, n); j++) {
+            var ds = shifts.filter(function (s) { return s.index >= ki && s.index <= j && s.type === 'downshift'; });
             if (ds.length) { found = ds[0]; break; }
           }
-          var v = num(row[vssCol]);
+          var kv = vssC[ki];
           kickdowns.push({
-            index: i, tpsFrom: round2(prevTps), tpsTo: round2(tps),
-            mphAt: v === null ? null : round2(v * vssToMph),
+            index: ki, tpsFrom: round2(prevTps), tpsTo: round2(ktps),
+            mphAt: kv !== kv ? null : round2(kv * vssToMph),
             downshiftAt: found ? found.index : null,
-            delaySec: found ? round2((found.index - i) * 0.145) : null,
+            delaySec: found ? round2((found.index - ki) * 0.145) : null,
             noKickdown: !found
           });
         }
-        prevTps = tps;
-      });
+        prevTps = ktps;
+      }
     }
     var kdDone = kickdowns.filter(function (k) { return !k.noKickdown; });
     var avgKd = kdDone.length
@@ -929,24 +1251,26 @@
     // NOTE: the companion "Shift Time Error" channels read a constant
     // ~5.7 in the field logs seen so far — their encoding is not understood,
     // so they are mapped but never used for tuning decisions.
+    var shiftT12C = ncol(t, P66.columnFor(mapResult, 'SHIFT_T12'));
+    var shiftT23C = ncol(t, P66.columnFor(mapResult, 'SHIFT_T23'));
     function pcmShiftSnapshots(col, pair) {
       var out = [];
       if (!col) return out;
-      var prev = null, started = false;
-      rows.forEach(function (row, i) {
-        var v = num(row[col]);
-        if (v === null || v <= 0) { prev = v; started = true; return; }
+      var prev = NaN, started = false;
+      for (var pi = 0; pi < n; pi++) {
+        var v = col[pi];
+        if (v !== v || v <= 0) { prev = v; started = true; continue; }
         // Only value *changes* count — the reading at log start is just
         // the pre-log state, not an observed shift.
-        if (started && prev !== null && Math.abs(v - prev) > 0.005) {
-          out.push({ index: i, pair: pair, timeSec: round3(v) });
+        if (started && prev === prev && Math.abs(v - prev) > 0.005) {
+          out.push({ index: pi, pair: pair, timeSec: round3(v) });
         }
         prev = v; started = true;
-      });
+      }
       return out;
     }
-    var pcmShifts = pcmShiftSnapshots(P66.columnFor(mapResult, 'SHIFT_T12'), '1-2')
-      .concat(pcmShiftSnapshots(P66.columnFor(mapResult, 'SHIFT_T23'), '2-3'));
+    var pcmShifts = pcmShiftSnapshots(shiftT12C, '1-2')
+      .concat(pcmShiftSnapshots(shiftT23C, '2-3'));
     function pcmTypical(pair) {
       var ts = pcmShifts.filter(function (s) { return s.pair === pair; })
         .map(function (s) { return s.timeSec; }).sort(function (a, b) { return a - b; });
@@ -956,32 +1280,39 @@
     // --- TCC from the channel when the log carries it --------------------
     // Falls back to the ratio-step inference above when absent/empty.
     var tccSource = 'inferred';
-    var tccCol = P66.columnFor(mapResult, 'TCC');
-    if (tccCol) {
+    var tccName = P66.columnFor(mapResult, 'TCC');
+    if (tccName) {
       var tccSeen = 0, lastTccLocked = null, chApplies = 0, chReleases = 0;
       var chEvents = [];
-      rows.forEach(function (row, i) {
-        var raw = row[tccCol];
-        if (raw === null || raw === undefined || String(raw).trim() === '') return;
+      // The TCC channel may be numeric (duty cycle) or a state string —
+      // read the raw channel, not the numeric-only column.
+      var tccRaw = t.col(tccName);
+      for (var ci = 0; ci < n; ci++) {
+        var raw = tccRaw ? tccRaw[ci] : null;
+        if (raw === null || raw === undefined) continue;
+        if (typeof raw === 'number' && raw !== raw) continue; // NaN = missing
+        if (String(raw).trim() === '') continue;
         tccSeen++;
         var locked;
-        var n = num(raw);
-        if (n !== null) locked = n > 50; // duty-cycle style
+        // Numeric (duty-cycle style) vs state-string style — same typeof
+        // test the old num() helper applied: only real numbers count as
+        // duty cycle, everything else goes through the state regex.
+        if (typeof raw === 'number' && isFinite(raw)) locked = raw > 50;
         else locked = /on|lock|engag/i.test(String(raw)); // state style
         if (lastTccLocked !== null && locked !== lastTccLocked) {
           if (locked) chApplies++; else chReleases++;
-          chEvents.push({ index: i, type: locked ? 'apply' : 'release', gear: gears[i] });
+          chEvents.push({ index: ci, type: locked ? 'apply' : 'release', gear: gears[ci] || null });
         }
         lastTccLocked = locked;
-      });
+      }
       if (tccSeen > 10) {
         tccSource = 'channel';
         tccApplies = chApplies; tccReleases = chReleases;
         tccEvents = chEvents.slice(0, 20);
         tccCycles = 0;
-        for (var c2 = 1; c2 < chEvents.length; c2++) {
-          if (chEvents[c2].index - chEvents[c2 - 1].index < TRANS_HUNT_WINDOW &&
-              chEvents[c2].type !== chEvents[c2 - 1].type) tccCycles++;
+        for (var c3 = 1; c3 < chEvents.length; c3++) {
+          if (chEvents[c3].index - chEvents[c3 - 1].index < TRANS_HUNT_WINDOW &&
+              chEvents[c3].type !== chEvents[c3 - 1].type) tccCycles++;
         }
       }
     }
@@ -1040,47 +1371,59 @@
   var IMBALANCE_MIN_SAMPLES = 15; // per bank, per cell
   var IMBALANCE_DELTA_PCT = 5;    // |avg1 - avg2| at or above this is a finding
 
-  function analyzeBankImbalance(rows, mapResult) {
-    var b1 = { stft: P66.columnFor(mapResult, 'STFT_B1'), ltft: P66.columnFor(mapResult, 'LTFT_B1') };
-    var b2 = { stft: P66.columnFor(mapResult, 'STFT_B2'), ltft: P66.columnFor(mapResult, 'LTFT_B2') };
-    if ((!b1.stft && !b1.ltft) || (!b2.stft && !b2.ltft)) {
+  function analyzeBankImbalance(rows, mapResult, features) {
+    var t = P66.asTable(rows);
+    var feats = featuresFor(t, mapResult, features);
+    var b1stft = P66.columnFor(mapResult, 'STFT_B1');
+    var b1ltft = P66.columnFor(mapResult, 'LTFT_B1');
+    var b2stft = P66.columnFor(mapResult, 'STFT_B2');
+    var b2ltft = P66.columnFor(mapResult, 'LTFT_B2');
+    if ((!b1stft && !b1ltft) || (!b2stft && !b2ltft)) {
       return { available: false, reason: 'Need bank-specific STFT/LTFT channels (both banks).' };
     }
-    var rpmCol = P66.columnFor(mapResult, 'RPM');
-    var mapCol = P66.columnFor(mapResult, 'MAP');
-    if (!rpmCol || !mapCol) {
+    var rpmName = P66.columnFor(mapResult, 'RPM');
+    var mapName = P66.columnFor(mapResult, 'MAP');
+    var rpmC0 = ncol(t, rpmName);
+    var mapC0 = ncol(t, mapName);
+    if (!rpmC0 || !mapC0) {
       return { available: false, reason: 'Need RPM and MAP channels.' };
     }
-    var q = qualityRows(rows, mapResult);
-    rows = q.rows;
+    var q = qualityRows(t, mapResult, feats);
+    var gt = P66.asTable(q.rows);
+    var rpmC = ncol(gt, rpmName);
+    var mapC = ncol(gt, mapName);
+    var b1 = { stft: ncol(gt, b1stft), ltft: ncol(gt, b1ltft) };
+    var b2 = { stft: ncol(gt, b2stft), ltft: ncol(gt, b2ltft) };
     var style1 = {
-      stft: b1.stft ? P66.detectTrimStyle(sampleColumn(rows, b1.stft)) : 'percent',
-      ltft: b1.ltft ? P66.detectTrimStyle(sampleColumn(rows, b1.ltft)) : 'percent'
+      stft: b1.stft ? P66.detectTrimStyle(sampleColumn(gt, b1stft)) : 'percent',
+      ltft: b1.ltft ? P66.detectTrimStyle(sampleColumn(gt, b1ltft)) : 'percent'
     };
     var style2 = {
-      stft: b2.stft ? P66.detectTrimStyle(sampleColumn(rows, b2.stft)) : 'percent',
-      ltft: b2.ltft ? P66.detectTrimStyle(sampleColumn(rows, b2.ltft)) : 'percent'
+      stft: b2.stft ? P66.detectTrimStyle(sampleColumn(gt, b2stft)) : 'percent',
+      ltft: b2.ltft ? P66.detectTrimStyle(sampleColumn(gt, b2ltft)) : 'percent'
     };
-    function bankTrim(b, styles, row) {
-      var stft = b.stft ? P66.trimToPct(num(row[b.stft]), styles.stft) : 0;
-      var ltft = b.ltft ? P66.trimToPct(num(row[b.ltft]), styles.ltft) : 0;
+    function bankTrim(b, styles, i) {
+      var stft = b.stft ? P66.trimToPct(nn(b.stft[i]), styles.stft) : 0;
+      var ltft = b.ltft ? P66.trimToPct(nn(b.ltft[i]), styles.ltft) : 0;
       return stft + ltft;
     }
     var cells = {}; // "rpmBin|mapBin" -> { n1, sum1, n2, sum2 }
-    rows.forEach(function (row) {
-      var rpm = num(row[rpmCol]);
-      var map = num(row[mapCol]);
-      if (rpm === null || map === null) return;
+    for (var i = 0; i < gt.rowCount; i++) {
+      var rpm = rpmC[i];
+      var map = mapC[i];
+      if (rpm !== rpm || map !== map) continue;
       var key = rpmBin(rpm) + '|' + mapBin(map);
       var c = cells[key] || (cells[key] = { n1: 0, sum1: 0, n2: 0, sum2: 0, rpmBin: rpmBin(rpm), mapBin: mapBin(map) });
-      var t1 = bankTrim(b1, style1, row);
-      var t2 = bankTrim(b2, style2, row);
+      var t1 = bankTrim(b1, style1, i);
+      var t2 = bankTrim(b2, style2, i);
       // A row counts for a bank only when that bank actually reported.
-      if (b1.stft && num(row[b1.stft]) === null && b1.ltft && num(row[b1.ltft]) === null) { /* no b1 data */ }
+      var b1missing = (!b1.stft || b1.stft[i] !== b1.stft[i]) && (!b1.ltft || b1.ltft[i] !== b1.ltft[i]);
+      var b2missing = (!b2.stft || b2.stft[i] !== b2.stft[i]) && (!b2.ltft || b2.ltft[i] !== b2.ltft[i]);
+      if (b1.stft && b1missing && b1.ltft && b1missing) { /* no b1 data */ }
       else { c.n1++; c.sum1 += t1; }
-      if (b2.stft && num(row[b2.stft]) === null && b2.ltft && num(row[b2.ltft]) === null) { /* no b2 data */ }
+      if (b2.stft && b2missing && b2.ltft && b2missing) { /* no b2 data */ }
       else { c.n2++; c.sum2 += t2; }
-    });
+    }
     var findings = [];
     Object.keys(cells).forEach(function (key) {
       var c = cells[key];
@@ -1115,52 +1458,97 @@
   }
 
   function regionDistribution(rows) {
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
     var dist = {};
     REGIONS.forEach(function (r) { dist[r] = 0; });
-    rows.forEach(function (row) {
-      var region = row._region || 'cruise';
+    for (var i = 0; i < n; i++) {
+      var region = P66.regionAt(t, i);
       dist[region] = (dist[region] || 0) + 1;
-    });
+    }
     return dist;
   }
 
   /**
    * Full session analysis. Returns a report object.
    * opts.altitudeFt (default 2840) feeds the baro plausibility check.
+   * onStage(key, pct) — optional progress hook fired at coarse stages
+   * (see P66.ANALYSIS_STAGES). Used by the Web Worker / async wrapper so
+   * large logs can report progress off the main thread; synchronous
+   * callers simply omit it and the code path is unchanged.
    */
-  function analyzeSession(parsed, mapResult, opts) {
-    var rows = parsed.rows.slice();
-    segmentRows(rows, mapResult);
+  function analyzeSession(parsed, mapResult, opts, onStage) {
+    function stage(key, pct) {
+      if (typeof onStage === 'function') { try { onStage(key, pct); } catch (e) { /* listener error */ } }
+    }
+    var t = P66.asTable(parsed);
+    segmentRows(t, mapResult);
+    stage('segments', 5);
+    // One feature pass for the whole session; every analyze* below reduces
+    // these precomputed columns instead of re-scanning the log.
+    var feats = extractFeatures(t, mapResult);
+    stage('features', 12);
     var missing = [];
     ['RPM', 'MAP', 'TPS'].forEach(function (s) {
       if (!P66.columnFor(mapResult, s)) missing.push(s);
     });
     var altitudeFt = (opts && isFinite(opts.altitudeFt)) ? opts.altitudeFt
       : (typeof P66.DEFAULT_ALTITUDE_FT === 'number' ? P66.DEFAULT_ALTITUDE_FT : 2840);
-    return {
-      rowCount: rows.length,
-      regionDistribution: regionDistribution(rows),
+    var fuelTrims = analyzeFuelTrims(t, mapResult, feats);
+    stage('fuel', 22);
+    var knock = analyzeKnock(t, mapResult, feats);
+    stage('knock', 32);
+    var lambda = analyzeLambda(t, mapResult, feats);
+    stage('lambda', 40);
+    var narrowband = analyzeNarrowband(t, mapResult, feats);
+    stage('narrowband', 50);
+    var tipIn = analyzeTipIn(t, mapResult, feats);
+    stage('tipIn', 58);
+    var peEntry = analyzePeEntry(t, mapResult, feats);
+    stage('peEntry', 66);
+    var transmission = analyzeTransmission(t, mapResult, feats);
+    stage('transmission', 76);
+    var bankImbalance = analyzeBankImbalance(t, mapResult, feats);
+    stage('bankImbalance', 84);
+    var baro = (typeof P66.analyzeBaro === 'function')
+      ? P66.analyzeBaro(t, mapResult, altitudeFt)
+      : { available: false, reason: 'Altitude module not loaded (js/altitude.js).' };
+    stage('baro', 92);
+    var report = {
+      rowCount: t ? t.rowCount : 0,
+      regionDistribution: regionDistribution(t),
       missingChannels: missing,
       altitudeFt: altitudeFt,
-      fuelTrims: analyzeFuelTrims(rows, mapResult),
-      knock: analyzeKnock(rows, mapResult),
-      lambda: analyzeLambda(rows, mapResult),
-      narrowband: analyzeNarrowband(rows, mapResult),
-      tipIn: analyzeTipIn(rows, mapResult),
-      peEntry: analyzePeEntry(rows, mapResult),
-      transmission: analyzeTransmission(rows, mapResult),
-      bankImbalance: analyzeBankImbalance(rows, mapResult),
-      baro: (typeof P66.analyzeBaro === 'function')
-        ? P66.analyzeBaro(rows, mapResult, altitudeFt)
-        : { available: false, reason: 'Altitude module not loaded (js/altitude.js).' }
+      fuelTrims: fuelTrims,
+      knock: knock,
+      lambda: lambda,
+      narrowband: narrowband,
+      tipIn: tipIn,
+      peEntry: peEntry,
+      transmission: transmission,
+      bankImbalance: bankImbalance,
+      baro: baro
     };
+    stage('report', 100);
+    return report;
   }
 
   function round2(v) { return Math.round(v * 100) / 100; }
   function round3(v) { return Math.round(v * 1000) / 1000; }
 
+  // Coarse progress stages for analyzeSession's optional onStage hook
+  // (drives the Web Worker progress messages and the async wrapper).
+  // Keys are stable API; pct is 0-100 and non-decreasing.
+  var ANALYSIS_STAGES = [
+    ['segments', 5], ['features', 12], ['fuel', 22], ['knock', 32],
+    ['lambda', 40], ['narrowband', 50], ['tipIn', 58], ['peEntry', 66],
+    ['transmission', 76], ['bankImbalance', 84], ['baro', 92], ['report', 100]
+  ];
+
   P66.segmentRows = segmentRows;
   P66.qualityRows = qualityRows;
+  P66.extractFeatures = extractFeatures;
+  P66.SEGMENT_IDS = SEGMENT_IDS;
   P66.analyzeBankImbalance = analyzeBankImbalance;
   P66.analyzeFuelTrims = analyzeFuelTrims;
   P66.analyzeKnock = analyzeKnock;
@@ -1170,6 +1558,7 @@
   P66.analyzePeEntry = analyzePeEntry;
   P66.analyzeTransmission = analyzeTransmission;
   P66.analyzeSession = analyzeSession;
+  P66.ANALYSIS_STAGES = ANALYSIS_STAGES;
   P66.toLambda = toLambda;
   P66.REGIONS = REGIONS;
 })(typeof window !== 'undefined' ? window : global);

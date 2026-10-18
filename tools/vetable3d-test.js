@@ -6,7 +6,7 @@ var fs = require('fs');
 var path = require('path');
 
 var ROOT = path.join(__dirname, '..');
-['js/channel-mapper.js', 'js/xdf-map.js', 'js/dashboard.js', 'js/bundled-catalog.js'].forEach(function (f) {
+['js/log-parser.js', 'js/channel-mapper.js', 'js/xdf-map.js', 'js/dashboard.js', 'js/ve3d.js', 'js/bundled-catalog.js'].forEach(function (f) {
   eval(fs.readFileSync(path.join(ROOT, f), 'utf8')); // eslint-disable-line no-eval
 });
 var P66 = global.P66;

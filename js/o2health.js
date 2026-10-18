@@ -53,12 +53,6 @@
   var LAZY_AMP_MV = 600;
   var FALLBACK_SAMPLE_S = 0.145;
 
-  function num(v) {
-    if (v === null || v === undefined || v === '') return null;
-    var n = Number(v);
-    return (typeof n === 'number' && isFinite(n)) ? n : null;
-  }
-
   function round2(v) { return Math.round(v * 100) / 100; }
 
   function mean(a) {
@@ -70,39 +64,45 @@
 
   /**
    * Analyze one bank's O2 signal over warm rows.
+   * t: log table (or legacy row array — normalized once at the boundary).
    * Returns { switchesPerMin, avgHighMv, avgLowMv, amplitudeMv,
    *           lazy, available, reason }.
    */
-  function analyzeBank(rows, o2Col, timeCol, ectCol) {
+  function analyzeBank(rows, o2Name, timeName, ectName) {
     var noCol = {
       switchesPerMin: null, avgHighMv: null, avgLowMv: null, amplitudeMv: null,
       lazy: null, available: false, reason: 'No O2 sensor column mapped for this bank.'
     };
-    if (!o2Col) return noCol;
+    if (!o2Name) return noCol;
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var o2C = P66.numView(t, o2Name);
+    var timeC = P66.numView(t, timeName);
+    var ectC = P66.numView(t, ectName);
+    if (!o2C) return noCol;
 
     var highs = [], lows = [];
     var switches = 0, usable = 0;
     var stateAbove = null; // latched side of the hysteresis band
-    var firstT = null, lastT = null, rowsUsed = 0, rowsSeen = rows.length;
+    var firstT = NaN, lastT = NaN, rowsUsed = 0, rowsSeen = n;
 
-    for (var i = 0; i < rows.length; i++) {
-      var row = rows[i];
-      if (ectCol) {
-        var ect = num(row[ectCol]);
-        // A null ECT is "unknown", not cold: keep the row (same convention
+    for (var i = 0; i < n; i++) {
+      if (ectC) {
+        var ect = ectC[i];
+        // A missing ECT is "unknown", not cold: keep the row (same convention
         // as analyzer.js's quality gating).
-        if (ect !== null && ect <= WARM_ECT_F) continue;
+        if (ect === ect && ect <= WARM_ECT_F) continue;
       }
-      var v = num(row[o2Col]);
-      if (v === null) continue;
+      var v = o2C[i];
+      if (v !== v) continue;
       usable++;
       rowsUsed++;
 
-      if (timeCol) {
-        var t = num(row[timeCol]);
-        if (t !== null) {
-          if (firstT === null) firstT = t;
-          lastT = t;
+      if (timeC) {
+        var tt = timeC[i];
+        if (tt === tt) {
+          if (firstT !== firstT) firstT = tt;
+          lastT = tt;
         }
       }
       if (v > O2_HYST_HIGH_MV) highs.push(v);
@@ -119,7 +119,7 @@
       // never counts as a switch.
     }
 
-    var ectNote = ectCol
+    var ectNote = ectName
       ? (rowsSeen - rowsUsed) + ' cold row(s) excluded (ECT ≤ ' + WARM_ECT_F + '°F)'
       : 'no ECT channel — warmup gating unavailable, all samples used';
 
@@ -139,7 +139,7 @@
     var amplitude = (avgHigh !== null && avgLow !== null)
       ? (avgHigh - avgLow) : 0;
 
-    var minutes = (firstT !== null && lastT !== null && lastT > firstT)
+    var minutes = (firstT === firstT && lastT === lastT && lastT > firstT)
       ? (lastT - firstT) / 60
       : (usable * FALLBACK_SAMPLE_S) / 60;
     var spm = minutes > 0 ? switches / minutes : 0;
@@ -159,17 +159,18 @@
 
   /**
    * P66.analyzeO2Health(rows, mapResult) -> { b1: {...}, b2: {...} }
+   * rows: a log table or a legacy array of row objects.
    * Per-bank O2 health from the mapped O2_B1 / O2_B2 channels.
    * A single generic O2 signal (no bank split) is reported on Bank 1.
    */
   function analyzeO2Health(rows, mapResult) {
-    var b1Col = P66.columnFor(mapResult, 'O2_B1') || P66.columnFor(mapResult, 'O2');
-    var b2Col = P66.columnFor(mapResult, 'O2_B2');
-    var timeCol = P66.columnFor(mapResult, 'TIME');
-    var ectCol = P66.columnFor(mapResult, 'ECT');
+    var b1Name = P66.columnFor(mapResult, 'O2_B1') || P66.columnFor(mapResult, 'O2');
+    var b2Name = P66.columnFor(mapResult, 'O2_B2');
+    var timeName = P66.columnFor(mapResult, 'TIME');
+    var ectName = P66.columnFor(mapResult, 'ECT');
     return {
-      b1: analyzeBank(rows, b1Col, timeCol, ectCol),
-      b2: analyzeBank(rows, b2Col, timeCol, ectCol)
+      b1: analyzeBank(rows, b1Name, timeName, ectName),
+      b2: analyzeBank(rows, b2Name, timeName, ectName)
     };
   }
 

@@ -123,8 +123,8 @@ check('cold rows excluded from cell trim',
 var logPath = path.join(process.env.HOME, 'workspace/user/files/yesss.csv');
 var parsed = P66.parseLogText(fs.readFileSync(logPath, 'utf8'));
 var mapResult = P66.mapChannels(parsed.headers);
-check('yesss.csv parses to 10576 rows', parsed.rows.length === 10576,
-  'got ' + parsed.rows.length);
+check('yesss.csv parses to 10576 rows', parsed.rowCount === 10576,
+  'got ' + parsed.rowCount);
 
 var t0 = Date.now();
 var self = P66.compareLogs({ parsedLog: parsed, mapResult: mapResult }, null,

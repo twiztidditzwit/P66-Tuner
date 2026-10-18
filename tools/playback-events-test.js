@@ -192,12 +192,12 @@ console.log('  info: real log events knock=' + rc.knock + ' tipin=' + rc.tipin +
 check('real log has knock events', rc.knock > 0);
 check('real log has tipin events', rc.tipin > 0);
 check('real log event indices in range',
-  realEv.every(function (e) { return e.index >= 0 && e.index < parsed.rows.length; }));
+  realEv.every(function (e) { return e.index >= 0 && e.index < parsed.rowCount; }));
 check('real log event times finite',
   realEv.every(function (e) { return isFinite(e.time); }));
 check('real log events sorted',
   realEv.every(function (e, i) { return i === 0 || realEv[i - 1].index <= e.index; }));
-var kr = P66.analyzeKnock(parsed.rows, realMap);
+var kr = P66.analyzeKnock(parsed, realMap);
 check('knock tick count matches analyzeKnock event count',
   rc.knock === (kr.available ? kr.events.length : 0),
   'ticks=' + rc.knock + ' analyzer=' + (kr.available ? kr.events.length : 'n/a'));

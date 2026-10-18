@@ -166,7 +166,7 @@ check('renderO2Health no-throw without document', threw === false);
 var logPath = path.join(process.env.HOME, 'workspace/user/files/yesss.csv');
 var parsed = P66.parseLogText(fs.readFileSync(logPath, 'utf8'));
 var mapResult = P66.mapChannels(parsed.headers);
-var rreal = P66.analyzeO2Health(parsed.rows, mapResult);
+var rreal = P66.analyzeO2Health(parsed, mapResult);
 check('real log: both banks analyzed',
   rreal.b1.available === true && rreal.b2.available === true,
   JSON.stringify({ b1: rreal.b1.reason, b2: rreal.b2.reason }));

@@ -162,5 +162,4 @@
   }
 
   P66.analyzeCoverage = analyzeCoverage;
-  P66.COVERAGE_WEIGHTS = W;
 })(typeof window !== 'undefined' ? window : global);

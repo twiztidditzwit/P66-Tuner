@@ -58,6 +58,65 @@
   }
 
   /**
+   * Filter library records by name — case-insensitive substring match.
+   * Pure — safe to test under node. An empty (or null/undefined) query
+   * returns every record in its original order.
+   */
+  function filterXdfRecords(records, query) {
+    var q = String(query == null ? '' : query).toLowerCase();
+    if (!q) return (records || []).slice();
+    return (records || []).filter(function (r) {
+      var name = String((r && (r.name || r.fileName)) || '').toLowerCase();
+      return name.indexOf(q) >= 0;
+    });
+  }
+
+  /**
+   * Attach a search/filter box to the library dropdown.
+   *
+   * DOM-only helper: inserts an <input> directly before `select`, then
+   * hides (display:none) any option whose visible text does not contain the
+   * query (case-insensitive) as the user types. Escape clears the filter.
+   * Returns a handle { input, refresh, clear }; call handle.refresh() after
+   * the option list is rebuilt (e.g. by refreshXdfLibrary in app.js).
+   * Returns null when there is no DOM.
+   */
+  function attachXdfLibrarySearch(select, options) {
+    options = options || {};
+    var doc = (typeof document !== 'undefined') ? document : null;
+    if (!select || !select.parentNode || !doc) return null;
+    var input = doc.createElement('input');
+    input.type = 'search';
+    input.id = options.id || 'xdf-library-search';
+    input.className = options.className || 'xdf-library-search';
+    input.placeholder = options.placeholder || 'Filter saved XDFs…';
+    input.setAttribute('aria-label', options.ariaLabel || 'Filter saved XDF definitions');
+    input.setAttribute('autocomplete', 'off');
+    function apply() {
+      var q = String(input.value || '').toLowerCase();
+      var opts = select.options || [];
+      for (var i = 0; i < opts.length; i++) {
+        var opt = opts[i];
+        var text = String(opt.textContent || opt.text || '').toLowerCase();
+        opt.style.display = (!q || text.indexOf(q) >= 0) ? '' : 'none';
+      }
+    }
+    function clear() {
+      input.value = '';
+      apply();
+    }
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        if (e.preventDefault) e.preventDefault();
+        if (input.value) clear();
+      }
+    });
+    select.parentNode.insertBefore(input, select);
+    return { input: input, refresh: apply, clear: clear };
+  }
+
+  /**
    * IndexedDB backend. All methods return promises.
    */
   function indexedDbBackend() {
@@ -155,6 +214,8 @@
 
   P66.makeXdfRecord = makeRecord;
   P66.sortXdfRecords = sortRecords;
+  P66.filterXdfRecords = filterXdfRecords;
+  P66.attachXdfLibrarySearch = attachXdfLibrarySearch;
   P66.createXdfLibrary = createXdfLibrary;
   P66.xdfMemoryBackend = memoryBackend;
   // Browser default instance; lazily bound so node never touches indexedDB.

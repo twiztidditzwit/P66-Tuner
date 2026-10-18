@@ -71,24 +71,30 @@
   /**
    * Build the per-row timestamp array. Falls back to row-index timing when
    * the TIME channel is missing or non-numeric.
+   * rows: a log table or a legacy array of row objects.
    * Returns { times: number[], indexed: boolean }.
    */
   function pbBuildTimes(rows, timeCol) {
-    var times = new Array(rows.length);
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    // numView parses string-channel cells per cell, mirroring the old
+    // row-object parseFloat behavior for odd TIME formats.
+    var tc = P66.numView(t, timeCol);
+    var times = new Array(n);
     var ok = 0;
-    for (var i = 0; i < rows.length; i++) {
-      var t = timeCol ? parseFloat(rows[i][timeCol]) : NaN;
-      if (isFinite(t)) { times[i] = t; ok++; } else { times[i] = NaN; }
+    for (var i = 0; i < n; i++) {
+      var v = tc ? tc[i] : NaN;
+      if (isFinite(v)) { times[i] = v; ok++; } else { times[i] = NaN; }
     }
-    if (ok < rows.length * 0.9) {
+    if (ok < n * 0.9) {
       // Not enough usable timestamps — scrub by row index instead.
-      for (var j = 0; j < rows.length; j++) times[j] = j;
+      for (var j = 0; j < n; j++) times[j] = j;
       return { times: times, indexed: true };
     }
     // Fill rare gaps by interpolation so the search never sees NaN.
     var last = times[0];
     for (var k = 0; k < times.length; k++) {
-      if (isFinite(times[k])) { last = times[k]; } else { times[k] = last; }
+      if (times[k] === times[k]) { last = times[k]; } else { times[k] = last; }
     }
     return { times: times, indexed: false };
   }
@@ -129,6 +135,62 @@
   }
 
   /**
+   * Pure keyboard-shortcut mapper (no DOM — fully unit-testable).
+   *
+   * key:   KeyboardEvent.key (legacy 'Spacebar' accepted too).
+   * mods:  { shift, ctrl, meta, alt } booleans.
+   * state: { index, rowCount, eventIndices } — eventIndices sorted ascending,
+   *        from P66.computePlaybackEvents (same source as the tick strip).
+   *
+   * Returns an action descriptor — { type: 'toggle' } or
+   * { type: 'seek', index } — or null when the key does nothing.
+   * Ctrl/Meta/Alt combinations are never hijacked (browser shortcuts win).
+   */
+  function playbackKeyAction(key, mods, state) {
+    mods = mods || {};
+    if (mods.ctrl || mods.meta || mods.alt) return null;
+    state = state || {};
+    var rowCount = Math.max(1, state.rowCount | 0);
+    var idx = Math.max(0, Math.min(rowCount - 1, state.index | 0));
+    var events = state.eventIndices || [];
+    var k = (key === 'Spacebar') ? ' ' : key;
+    if (k === ' ') return { type: 'toggle' };
+    if (k === 'ArrowLeft') return { type: 'seek', index: Math.max(0, idx - (mods.shift ? 10 : 1)) };
+    if (k === 'ArrowRight') return { type: 'seek', index: Math.min(rowCount - 1, idx + (mods.shift ? 10 : 1)) };
+    if (k === '[') {
+      // Previous event strictly below the current index.
+      var prev = -1;
+      for (var i = 0; i < events.length && events[i] < idx; i++) prev = events[i];
+      return prev >= 0 ? { type: 'seek', index: prev } : null;
+    }
+    if (k === ']') {
+      // Next event strictly above the current index.
+      for (var j = 0; j < events.length; j++) {
+        if (events[j] > idx) return { type: 'seek', index: events[j] };
+      }
+      return null;
+    }
+    if (k === 'Home') return { type: 'seek', index: 0 };
+    if (k === 'End') return { type: 'seek', index: rowCount - 1 };
+    return null;
+  }
+
+  /**
+   * Focus guard for playback shortcuts: typing contexts (input, textarea,
+   * select, contentEditable) keep every keystroke, and buttons keep Space so
+   * the native button activation still fires.
+   */
+  function playbackKeyShouldIgnore(target, key) {
+    if (!target) return false;
+    var tag = String(target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    if (target.isContentEditable) return true;
+    var k = (key === 'Spacebar') ? ' ' : key;
+    if (k === ' ' && tag === 'button') return true;
+    return false;
+  }
+
+  /**
    * Playback controller: time-based engine other views (strip charts, event
    * ticks, sparklines) can synchronize with. Owns the rAF loop and notifies
    * subscribers with the current row index on every painted frame.
@@ -138,17 +200,21 @@
    *   ctl.seek(120); ctl.play(); ctl.pause(); ctl.toggle();
    *   ctl.setSpeed(2); ctl.getIndex(); ctl.getState(); ctl.stop();
    *   ctl.valueAt(gaugeIdx, rowIdx); // display number or NaN
+   *   ctl.table;                     // the columnar log table
    *
    * Returns null when there are no rows.
    */
   function createPlaybackController(parsedLog, mapResult) {
-    var rows = (parsedLog && parsedLog.rows) || [];
-    if (!rows.length) return null;
+    var t = P66.asTable(parsedLog);
+    if (!t || !t.rowCount) return null;
+    var n = t.rowCount;
 
     var timeCol = P66.columnFor ? P66.columnFor(mapResult, 'TIME') : null;
-    var tb = pbBuildTimes(rows, timeCol);
+    var tb = pbBuildTimes(t, timeCol);
     var times = tb.times;
-    var cols = pbResolveColumns(mapResult);
+    // Resolve each gauge to its column storage once — valueAt then indexes
+    // the Float32Array (or string array) directly. NaN = missing cell.
+    var colArrs = pbResolveColumns(mapResult).map(function (name) { return name ? t.col(name) : null; });
     var listeners = [];
     var state = {
       playing: false,
@@ -167,7 +233,7 @@
     }
 
     function setIndex(idx) {
-      idx = Math.max(0, Math.min(rows.length - 1, idx | 0));
+      idx = Math.max(0, Math.min(n - 1, idx | 0));
       state.index = idx;
       state.cur = times[idx];
       emit();
@@ -189,7 +255,7 @@
       state.cur += dt;
       if (state.cur >= tMax) {
         state.cur = tMax;
-        state.index = rows.length - 1;
+        state.index = n - 1;
         setPlaying(false);
         emit();
         return;
@@ -216,7 +282,7 @@
     }
 
     var api = {
-      rows: rows,
+      table: t,
       times: times,
       indexed: tb.indexed,
       tMin: tMin,
@@ -247,9 +313,9 @@
       setSpeed: function (s) { state.speed = s; emit(); },
       valueAt: function (gi, idx) {
         var g = HUD_GAUGES[gi];
-        var col = cols[gi];
-        if (!g || !col || !rows[idx]) return NaN;
-        var raw = rows[idx][col];
+        var arr = colArrs[gi];
+        if (!g || !arr || idx < 0 || idx >= n) return NaN;
+        var raw = arr[idx];
         var num = (typeof raw === 'number') ? raw : parseFloat(raw);
         if (g.toAfr) num = pbToAfr(num);
         return num;
@@ -274,14 +340,14 @@
       container.innerHTML = '<p class="muted">Load a log to play it back.</p>';
       return null;
     }
-    var rows = ctl.rows;
+    var n = ctl.table.rowCount;
 
     // ---- transport bar ----
     var bar = document.createElement('div');
     bar.className = 'pb-transport';
     bar.innerHTML =
       '<button type="button" class="pb-play" aria-label="Play or pause">▶</button>' +
-      '<input type="range" class="pb-scrub" min="0" max="' + (rows.length - 1) + '" value="0" step="1" aria-label="Scrub log" />' +
+      '<input type="range" class="pb-scrub" min="0" max="' + (n - 1) + '" value="0" step="1" aria-label="Scrub log" />' +
       '<span class="pb-time muted">0.0s</span>' +
       '<span class="pb-speed" role="group" aria-label="Playback speed"></span>';
     container.appendChild(bar);
@@ -373,7 +439,94 @@
 
     paint(ctl.getIndex());
 
-    container._pbStop = function () { ctl.stop(); };
+    // ---- keyboard shortcuts ----
+    // Event indices come from the events module — the same source the tick
+    // strip renders from, so [ / ] hop between the visible ticks.
+    var evIdx = [];
+    if (typeof P66.computePlaybackEvents === 'function') {
+      try {
+        evIdx = P66.computePlaybackEvents(parsedLog, mapResult)
+          .map(function (ev) { return ev.index; })
+          .sort(function (a, b) { return a - b; });
+      } catch (e) { evIdx = []; }
+    }
+
+    var hint = document.createElement('div');
+    hint.className = 'pb-keys-hint muted';
+    hint.textContent = 'Space play/pause · ←/→ scrub (⇧ = 10) · [ ] jump events · Home/End';
+    bar.appendChild(hint);
+
+    // ---- engine sound (item 21): synthesized V6 note tracking RPM ----
+    // Honest label: "(synth)" — this is synthesized, not his exhaust.
+    var sndWrap = document.createElement('div');
+    sndWrap.className = 'pb-sound muted';
+    sndWrap.innerHTML =
+      '<label><input type="checkbox" class="pb-snd-toggle"> Engine sound (synth)</label> ' +
+      '<input type="range" class="pb-snd-vol" min="0" max="100" value="70" ' +
+      'aria-label="Engine sound volume" style="width:90px;vertical-align:middle">';
+    bar.appendChild(sndWrap);
+    var sndToggle = sndWrap.querySelector('.pb-snd-toggle');
+    var sndVol = sndWrap.querySelector('.pb-snd-vol');
+    var engineSnd = null;
+    var sndUnsub = null;
+    function gaugeIdx(sig) {
+      var gs = P66.HUD_GAUGES || [];
+      for (var gi = 0; gi < gs.length; gi++) if (gs[gi].signal === sig) return gi;
+      return -1;
+    }
+    var GI_RPM = gaugeIdx('RPM'), GI_MAP = gaugeIdx('MAP'), GI_TPS = gaugeIdx('TPS');
+    sndToggle.addEventListener('change', function () {
+      // User gesture: the module creates/resumes the AudioContext here
+      // (autoplay policy).
+      if (sndToggle.checked) {
+        if (typeof P66.createEngineSound !== 'function') { sndToggle.checked = false; sndToggle.disabled = true; return; }
+        if (!engineSnd) engineSnd = P66.createEngineSound();
+        if (!engineSnd.setEnabled(true)) { sndToggle.checked = false; sndToggle.disabled = true; return; }
+        engineSnd.setVolume(sndVol.value / 100);
+      } else if (engineSnd) {
+        engineSnd.setEnabled(false);
+      }
+    });
+    sndVol.addEventListener('input', function () {
+      if (engineSnd) engineSnd.setVolume(sndVol.value / 100);
+    });
+    if (typeof P66.createEngineSound === 'function') {
+      // Feed current RPM/MAP/TPS on every emitted frame; the module's
+      // watchdog auto-mutes when frames stall (pause/scrub-end), so a drone
+      // can never be left running.
+      sndUnsub = ctl.onFrame(function (idx) {
+        if (!engineSnd || !engineSnd.isEnabled()) return;
+        try {
+          engineSnd.update(ctl.valueAt(GI_RPM, idx), ctl.valueAt(GI_MAP, idx), ctl.valueAt(GI_TPS, idx));
+        } catch (e) { /* never break playback for audio */ }
+      });
+    }
+
+    function pbUiVisible() {
+      if (!container || typeof container.getBoundingClientRect !== 'function') return true;
+      var r = container.getBoundingClientRect();
+      return r.width > 0 || r.height > 0;
+    }
+
+    function onPbKey(e) {
+      if (P66.playbackKeyShouldIgnore(e.target, e.key)) return;
+      if (container.isConnected === false || !pbUiVisible()) return;
+      var action = P66.playbackKeyAction(e.key,
+        { shift: !!e.shiftKey, ctrl: !!e.ctrlKey, meta: !!e.metaKey, alt: !!e.altKey },
+        { index: ctl.getIndex(), rowCount: n, eventIndices: evIdx });
+      if (!action) return;
+      e.preventDefault();
+      if (action.type === 'toggle') ctl.toggle();
+      else if (action.type === 'seek') ctl.seek(action.index);
+    }
+    document.addEventListener('keydown', onPbKey);
+
+    container._pbStop = function () {
+      ctl.stop();
+      document.removeEventListener('keydown', onPbKey);
+      if (sndUnsub) { try { sndUnsub(); } catch (e) {} sndUnsub = null; }
+      if (engineSnd) { try { engineSnd.destroy(); } catch (e) {} engineSnd = null; }
+    };
     return ctl;
   }
 
@@ -384,6 +537,8 @@
   P66.pbRowIndexAt = pbRowIndexAt;
   P66.pbValueColor = pbValueColor;
   P66.pbResolveColumns = pbResolveColumns;
+  P66.playbackKeyAction = playbackKeyAction;
+  P66.playbackKeyShouldIgnore = playbackKeyShouldIgnore;
   P66.createPlaybackController = createPlaybackController;
   P66.renderPlayback = renderPlayback;
 })(typeof window !== 'undefined' ? window : global);

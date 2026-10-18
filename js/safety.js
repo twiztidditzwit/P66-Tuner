@@ -284,5 +284,4 @@
   }
 
   P66.checkBinary = checkBinary;
-  P66.readCalId = readCalId;
 })(typeof window !== 'undefined' ? window : global);

@@ -494,6 +494,11 @@
   var compareLog = null;
   var compareMap = null;
 
+  // Multi-log session: [{ name, table }] in load order. parsedLog is the
+  // single table when one log is loaded, or the P66.mergeLogTables() union
+  // when several are — the Analyze button always runs on parsedLog.
+  var sessionLogs = [];
+
   /**
    * Render one view into a container, isolating failures so one broken
    * view can't take down the rest of the page.
@@ -521,7 +526,11 @@
     if (!parsedLog || !mapResult) return;
     safeRender('event-ticks', function (el) {
       if (P66.renderEventTicks && P66.computePlaybackEvents && playbackCtl) {
-        P66.renderEventTicks(el, playbackCtl, P66.computePlaybackEvents(parsedLog, mapResult));
+        P66.renderEventTicks(el, playbackCtl, P66.computePlaybackEvents(parsedLog, mapResult), {
+          table: parsedLog,
+          mapResult: mapResult,
+          krScale: (sessionReport && sessionReport.knock && sessionReport.knock.krScale) || 1
+        });
       }
     });
     safeRender('stripcharts', function (el) {
@@ -531,32 +540,55 @@
     });
     safeRender('segments', function (el) {
       if (P66.renderSegments && P66.analyzeSegments) {
-        P66.renderSegments(el, P66.analyzeSegments(parsedLog.rows, mapResult));
+        P66.renderSegments(el, P66.analyzeSegments(parsedLog, mapResult));
       }
     });
     safeRender('o2health', function (el) {
       if (P66.renderO2Health && P66.analyzeO2Health) {
-        P66.renderO2Health(el, P66.analyzeO2Health(parsedLog.rows, mapResult));
+        P66.renderO2Health(el, P66.analyzeO2Health(parsedLog, mapResult));
       }
     });
     safeRender('reportcard', function (el) {
-      if (P66.renderReportCard && P66.buildReportData) {
-        P66.renderReportCard(el, P66.buildReportData(parsedLog, mapResult));
+      // Lazy-loaded: js/report.js is fetched on first render only.
+      function drawReport() {
+        if (P66.renderReportCard && P66.buildReportData) {
+          P66.renderReportCard(el, P66.buildReportData(parsedLog, mapResult));
+        }
+      }
+      if (P66.renderReportCard || typeof P66.loadScriptOnce !== 'function') {
+        drawReport();
+      } else {
+        P66.loadScriptOnce('js/report.js').then(drawReport, function () {
+          placeholder('reportcard', 'Load a log to build the report card.');
+        });
       }
     });
     if (P66.setVePointsSource) {
       try { P66.setVePointsSource({ parsedLog: parsedLog, mapResult: mapResult }); }
       catch (err) { /* 3D view not rendered yet — toggle stays disabled */ }
+    } else if (typeof P66.loadScriptOnce === 'function') {
+      // 3D module not loaded yet: stash for the lazy ve3d.js gate to pick up.
+      P66._vePointsPending = { parsedLog: parsedLog, mapResult: mapResult };
     }
     renderCompareView();
   }
 
   function renderCompareView() {
     safeRender('log-compare', function (el) {
-      if (!P66.renderCompare || !P66.compareLogs) return;
-      P66.renderCompare(el, P66.compareLogs(
-        { parsedLog: parsedLog, mapResult: mapResult }, null,
-        compareLog ? { parsedLog: compareLog, mapResult: compareMap } : null, null));
+      // Lazy-loaded: js/compare.js is fetched on first render only.
+      function drawCompare() {
+        if (!P66.renderCompare || !P66.compareLogs) return;
+        P66.renderCompare(el, P66.compareLogs(
+          { parsedLog: parsedLog, mapResult: mapResult }, null,
+          compareLog ? { parsedLog: compareLog, mapResult: compareMap } : null, null));
+      }
+      if (P66.renderCompare || typeof P66.loadScriptOnce !== 'function') {
+        drawCompare();
+      } else {
+        P66.loadScriptOnce('js/compare.js').then(drawCompare, function () {
+          placeholder('log-compare', 'Load your main log, then a second log to compare.');
+        });
+      }
     });
   }
 
@@ -570,6 +602,7 @@
     if (P66.setVePointsSource) {
       try { P66.setVePointsSource(null); } catch (err) { /* ignore */ }
     }
+    P66._vePointsPending = null;
     compareLog = null;
     compareMap = null;
     var cmp = document.getElementById('compare-log-input');
@@ -611,6 +644,8 @@
       } else if (cur && recs.some(function (r) { return r.id === cur; })) {
         sel.value = cur;
       }
+      // Item 14: re-apply the saved-XDF search filter after the options rebuild.
+      if (sel._xdfSearch) { try { sel._xdfSearch.refresh(); } catch (e) {} }
       updateXdfDeleteBtn();
       if (info && !recs.length) {
         info.textContent = 'Drop your XDFs once — they stay in this browser.';
@@ -650,6 +685,12 @@
     var delBtn = document.getElementById('xdf-delete-btn');
     var info = document.getElementById('xdf-library-info');
     if (!lib || !sel) return;
+
+    // Item 14: search box filtering the saved-XDF dropdown. Note this filters
+    // saved XDF *files* — no 285-table picker exists in the UI (yet).
+    if (typeof P66.attachXdfLibrarySearch === 'function' && !sel._xdfSearch) {
+      try { sel._xdfSearch = P66.attachXdfLibrarySearch(sel); } catch (e) { /* optional UI */ }
+    }
 
     refreshXdfLibrary().then(function () {
       // Restore the last-used library XDF, if it still exists.
@@ -757,8 +798,8 @@
       '<li><strong>ADS:</strong> ' + fileLabel(files.ads) + '</li>' +
       '<li><strong>BIN:</strong> ' + fileLabel(files.bin) +
       (binBytes ? ' — ' + binBytes.length + ' bytes' : '') + '</li>' +
-      '<li><strong>LOG:</strong> ' + fileLabel(files.log) +
-      (parsedLog ? ' — ' + parsedLog.rowCount + ' rows parsed' : '') + '</li>' +
+      '<li><strong>LOG:</strong> ' + sessionLogLabel() +
+      (parsedLog ? ' — ' + parsedLog.rowCount.toLocaleString('en-US') + ' rows parsed' : '') + '</li>' +
       '</ul>';
   }
 
@@ -788,6 +829,141 @@
       return '<tr><td>' + esc(CANONICAL_LABELS[sig]) + '</td>' +
         '<td class="muted">—</td><td class="status-bad">Missing</td></tr>';
     }).join('');
+  }
+
+  // ---- Multi-log session -----------------------------------------------
+  // The log file input accepts multiple files (see the `multiple`
+  // attribute on #log-input): every picked file is parsed and appended to
+  // the session list. One log -> single-log behavior, unchanged. Two or
+  // more -> rows are concatenated via P66.mergeLogTables() (channel union,
+  // NaN/null fill for missing channels) and the merged table flows through
+  // the existing pipeline exactly like a single parsed log.
+  function onLogFilesPicked(input) {
+    var picked = Array.prototype.slice.call(input.files || []);
+    input.value = ''; // re-picking the same file still fires change
+    if (!picked.length) return;
+    Promise.all(picked.map(function (f) {
+      return readLogFile(f).then(function (text) {
+        var t = P66.parseLogText(text);
+        t.logName = f.name; // provenance even for single-log sessions
+        return { name: f.name, table: t };
+      });
+    })).then(function (loaded) {
+      loaded.forEach(function (l) {
+        var ix = -1;
+        sessionLogs.forEach(function (e, i) { if (e.name === l.name) ix = i; });
+        if (ix >= 0) sessionLogs[ix] = l; // re-pick replaces the same name
+        else sessionLogs.push(l);
+        writeConsole('LOG file loaded: ' + l.name);
+      });
+      if (!files.log) files.log = picked[0];
+      rebuildLogSession();
+    }).catch(function (err) {
+      writeConsole('Failed to read log file: ' + err);
+    });
+  }
+
+  function sessionLogName() {
+    if (parsedLog && parsedLog.logName) return parsedLog.logName;
+    return sessionLogs.map(function (e) { return e.name; }).join(' + ');
+  }
+
+  function sessionLogLabel() {
+    if (!sessionLogs.length) return 'not loaded';
+    return sessionLogs.map(function (e) {
+      return esc(e.name) + ' (' + e.table.rowCount.toLocaleString('en-US') + ' rows)';
+    }).join(' + ');
+  }
+
+  function removeSessionLog(ix) {
+    var removed = sessionLogs.splice(ix, 1)[0];
+    if (removed) writeConsole('Removed from session: ' + removed.name);
+    if (files.log && removed && files.log.name === removed.name) {
+      files.log = null;
+    }
+    rebuildLogSession();
+  }
+
+  function renderSessionLogs() {
+    var wrap = document.getElementById('session-logs');
+    if (!wrap) return;
+    if (!sessionLogs.length) { wrap.innerHTML = ''; wrap.hidden = true; return; }
+    wrap.hidden = false;
+    wrap.innerHTML = sessionLogs.map(function (e, i) {
+      return '<span class="log-chip"><strong>' + esc(e.name) + '</strong>' +
+        '<span class="muted">' + e.table.rowCount.toLocaleString('en-US') + ' rows</span>' +
+        '<button type="button" data-logix="' + i + '" title="Remove from session" ' +
+        'aria-label="Remove ' + esc(e.name) + ' from session">×</button></span>';
+    }).join('');
+    Array.prototype.forEach.call(wrap.querySelectorAll('button[data-logix]'), function (b) {
+      b.addEventListener('click', function () {
+        removeSessionLog(parseInt(b.getAttribute('data-logix'), 10));
+      });
+    });
+  }
+
+  function renderMergeSummary() {
+    var el = document.getElementById('merge-summary');
+    if (!el) return;
+    if (!sessionLogs.length || !parsedLog) { el.textContent = ''; return; }
+    el.textContent = sessionLogs.length + (sessionLogs.length === 1 ? ' log' : ' logs') +
+      ' · ' + parsedLog.rowCount.toLocaleString('en-US') + ' rows' +
+      (sessionLogs.length > 1 ? ' (merged)' : '') +
+      ' · ' + parsedLog.columnCount + ' channels';
+  }
+
+  function rebuildLogSession() {
+    if (!sessionLogs.length) {
+      parsedLog = null; mapResult = null; sessionReport = null; playbackCtl = null;
+      clearLogViews();
+      var pbHud = document.getElementById('playback-hud');
+      if (pbHud && pbHud._pbStop) pbHud._pbStop();
+      if (pbHud) pbHud.innerHTML = '<p class="muted">Load a log to play it back.</p>';
+      refreshSummary();
+      renderMappingPreview();
+      renderSessionLogs();
+      renderMergeSummary();
+      return;
+    }
+    var tables = sessionLogs.map(function (e) { return e.table; });
+    if (tables.length === 1) {
+      parsedLog = tables[0];
+    } else {
+      if (typeof P66.mergeCompatible === 'function' && typeof P66.mergeLogTables === 'function') {
+        var compat = P66.mergeCompatible(tables);
+        compat.problems.forEach(function (p) { writeConsole('Merge note: ' + p); });
+        if (!compat.ok) {
+          writeConsole('Merge blocked: ' + compat.problems.join(' '));
+          return;
+        }
+        parsedLog = P66.mergeLogTables(tables, sessionLogs.map(function (e) {
+          return { name: e.name, rows: e.table.rowCount };
+        }));
+      } else {
+        writeConsole('Merge unavailable (js/log-merge.js not loaded) — using the first log only.');
+        parsedLog = tables[0];
+      }
+    }
+    mapResult = P66.mapChannels(parsedLog.headers);
+    sessionReport = null; // invalidate previous analysis
+    analysisResults.innerHTML = '<p class="muted">' +
+      (tables.length > 1 ? 'Logs merged — run analysis again.' : 'Log reloaded — run analysis again.') + '</p>';
+    tuneResults.innerHTML = '<p class="muted">Generate tune suggestions after analysis.</p>';
+    resetDashboardPlaceholders();
+    refreshSummary();
+    renderMappingPreview();
+    playbackCtl = P66.renderPlayback(document.getElementById('playback-hud'), parsedLog, mapResult);
+    renderLogViews();
+    renderSessionLogs();
+    renderMergeSummary();
+    writeConsole('LOG parsed: ' + parsedLog.rowCount + ' rows, ' +
+      parsedLog.columnCount + ' columns (delimiter: ' +
+      (parsedLog.delimiter === '\t' ? 'TAB' : parsedLog.delimiter) + ').' +
+      (tables.length > 1 ? ' Merged session of ' + tables.length + ' logs.' : ''));
+    parsedLog.warnings.forEach(writeConsole);
+    var mapped = Object.keys(mapResult.mapping).length;
+    writeConsole('Channel mapping: ' + mapped + ' signals mapped, ' +
+      mapResult.unmapped.length + ' columns unmapped.');
   }
 
   function readLogFile(file) {
@@ -829,30 +1005,14 @@
 
   Object.entries(fileInputs).forEach(function (entry) {    var key = entry[0], input = entry[1];
     input.addEventListener('change', function () {
+      if (key === 'log') {
+        // Multi-log session flow (see onLogFilesPicked): the input accepts
+        // several files and they merge into one analysis session.
+        onLogFilesPicked(input);
+        return;
+      }
       files[key] = input.files[0] || null;
-      if (key === 'log' && files.log) {
-        readLogFile(files.log).then(function (text) {
-          parsedLog = P66.parseLogText(text);
-          mapResult = P66.mapChannels(parsedLog.headers);
-          sessionReport = null; // invalidate previous analysis
-          analysisResults.innerHTML = '<p class="muted">Log reloaded — run analysis again.</p>';
-          tuneResults.innerHTML = '<p class="muted">Generate tune suggestions after analysis.</p>';
-          resetDashboardPlaceholders();
-          refreshSummary();
-          renderMappingPreview();
-          playbackCtl = P66.renderPlayback(document.getElementById('playback-hud'), parsedLog, mapResult);
-          renderLogViews();
-          writeConsole('LOG parsed: ' + parsedLog.rowCount + ' rows, ' +
-            parsedLog.columnCount + ' columns (delimiter: ' +
-            (parsedLog.delimiter === '\t' ? 'TAB' : parsedLog.delimiter) + ').');
-          parsedLog.warnings.forEach(writeConsole);
-          var mapped = Object.keys(mapResult.mapping).length;
-          writeConsole('Channel mapping: ' + mapped + ' signals mapped, ' +
-            mapResult.unmapped.length + ' columns unmapped.');
-        }).catch(function (err) {
-          writeConsole('Failed to read log file: ' + err);
-        });
-      } else if (key === 'xdf' && files.xdf) {
+      if (key === 'xdf' && files.xdf) {
         readLogFile(files.xdf).then(function (text) {
           try {
             xdfCatalog = P66.parseXdfXml(text);
@@ -885,11 +1045,7 @@
           writeConsole('Failed to read BIN file: ' + err);
         });
       } else {
-        if (key === 'log') { parsedLog = null; mapResult = null; sessionReport = null; playbackCtl = null;
-          clearLogViews();
-          var pbHud = document.getElementById('playback-hud');
-          if (pbHud && pbHud._pbStop) pbHud._pbStop();
-          if (pbHud) pbHud.innerHTML = '<p class="muted">Load a log to play it back.</p>'; }
+        // (Log clearing goes through removeSessionLog / rebuildLogSession.)
         if (key === 'xdf') { xdfCatalog = null; xdfSourceLabel = null; pendingXdf = null;
           var xSaveBtn = document.getElementById('xdf-save-btn');
           if (xSaveBtn) xSaveBtn.disabled = true; }
@@ -1065,6 +1221,15 @@
               (e.leanSpike ? 'yes' : 'no') + '</td></tr>';
           });
           html += '</tbody></table>';
+          // Item 12: AE scatter — lean depth vs throttle rate per stab.
+          if (typeof P66.tipinScatterData === 'function' && typeof P66.renderAeScatterSVG === 'function' &&
+              typeof P66.aeScatterCaption === 'function') {
+            try {
+              var aeData = P66.tipinScatterData(parsedLog, mapResult, ti);
+              html += '<p>' + esc(P66.aeScatterCaption(aeData)) + '</p>';
+              html += P66.renderAeScatterSVG(aeData);
+            } catch (aeerr) { /* chart is informational */ }
+          }
         }
       }
     } else {
@@ -1095,20 +1260,50 @@
       writeConsole('Analyze blocked: load a log file first.');
       return;
     }
-    try {
-      sessionReport = P66.analyzeSession(parsedLog, mapResult, { altitudeFt: currentAltitudeFt() });
+    var analyzeBtn = document.getElementById('analyze-btn');
+    analyzeBtn.disabled = true;
+    showAnalyzeProgress(0, 'start');
+    // Off the main thread when Workers are available (falls back to the
+    // synchronous analyzeSession under node / file:// automatically).
+    P66.analyzeSessionAsync(parsedLog, mapResult, function (pct, stageKey) {
+      showAnalyzeProgress(pct, stageKey);
+    }, { altitudeFt: currentAltitudeFt() }).then(function (report) {
+      analyzeBtn.disabled = false;
+      hideAnalyzeProgress();
+      sessionReport = report;
       sessionHistory.push(sessionReport);
       if (sessionHistory.length > 10) sessionHistory.shift();
       renderAnalysis(sessionReport);
       P66.renderDashboard(dashParts, sessionReport, parsedLog, mapResult, sessionHistory,
-        { logName: files.log ? files.log.name : '' });
+        { logName: sessionLogName() });
       writeConsole('Analysis complete: ' + sessionReport.rowCount + ' rows, ' +
         Object.keys(sessionReport.regionDistribution).length + ' regions classified. ' +
         '(session ' + sessionHistory.length + ' in history)');
-    } catch (err) {
+    }).catch(function (err) {
+      analyzeBtn.disabled = false;
+      hideAnalyzeProgress();
       writeConsole('Analysis failed: ' + (err && err.message ? err.message : err));
-    }
+    });
   });
+
+  // Minimal determinate progress for the async (worker) analysis path.
+  var analyzeProgressWrap = document.getElementById('analyze-progress');
+  var analyzeProgressBar = document.getElementById('analyze-progress-bar');
+  var analyzeProgressLabel = document.getElementById('analyze-progress-label');
+  function showAnalyzeProgress(pct, stageKey) {
+    if (!analyzeProgressWrap) return;
+    analyzeProgressWrap.hidden = false;
+    var p = Math.max(0, Math.min(100, pct || 0));
+    analyzeProgressBar.style.width = p + '%';
+    var labels = P66.ANALYSIS_STAGE_LABELS || {};
+    var label = labels[stageKey] || 'Analyzing…';
+    analyzeProgressLabel.textContent = label + ' — ' + Math.round(p) + '%';
+  }
+  function hideAnalyzeProgress() {
+    if (!analyzeProgressWrap) return;
+    analyzeProgressWrap.hidden = true;
+    analyzeProgressBar.style.width = '0%';
+  }
 
   function renderTune(result) {
     var html = '<p><strong>' + esc(result.summary) + '</strong></p>';
@@ -1282,6 +1477,16 @@
               });
               html += '</ul>';
             }
+          // Patch impact preview: informational pre-apply summary against the
+          // cumulative ledger guardrails. Read-only — never blocks the tune.
+          if (typeof P66.previewPatchImpact === 'function' && typeof P66.renderPatchPreviewHTML === 'function') {
+            try {
+              var ledgerForPreview = (typeof P66.createLedger === 'function' && provenance.sourceSha256)
+                ? { fingerprint: provenance.sourceSha256, ledger: P66.createLedger() }
+                : null;
+              html += P66.renderPatchPreviewHTML(P66.previewPatchImpact(allPatches, ledgerForPreview));
+            } catch (pperr) { /* preview is informational; never block on it */ }
+          }
           html += '<table><thead><tr><th>Table</th><th>Address</th><th>Cell</th><th>Old</th><th>New</th><th>Δ</th></tr></thead><tbody>';
           allPatches.forEach(function (p) {
             var delta;
@@ -1296,6 +1501,12 @@
           html += '</tbody></table>';
           html += '<h3>VE Table: Before vs After</h3>';
           html += '<div id="ve-compare"><p class="muted">Rendering VE table…</p></div>';
+          // Standalone binary diff utility: compare any two 64KB BINs.
+          html += '<details><summary><strong>Compare two binaries</strong> ' +
+            '<span class="muted">— see what changed between any two 64KB BINs (informational only)</span></summary>' +
+            '<p><label>Binary A <input type="file" id="bindiff-a" accept=".bin"></label> ' +
+            '<label>Binary B <input type="file" id="bindiff-b" accept=".bin"></label></p>' +
+            '<div id="bindiff-out"><p class="muted">Pick two binaries to compare.</p></div></details>';
           html += '<p><strong>Audit trail</strong></p>';
           html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(provenance.sourceSha256) + '</code></p>';
           html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(provenance.patchedSha256) + '</code></p>';
@@ -1337,6 +1548,35 @@
 
     tuneResults.innerHTML = html;
 
+    // Binary diff utility wiring (item 7).
+    (function wireBinDiff() {
+      var aIn = document.getElementById('bindiff-a');
+      var bIn = document.getElementById('bindiff-b');
+      var out = document.getElementById('bindiff-out');
+      if (!aIn || !bIn || !out || typeof P66.diffBins !== 'function' || typeof P66.renderDiffHTML !== 'function') return;
+      var bufs = { a: null, b: null };
+      function readBin(input, key) {
+        var f = input.files && input.files[0];
+        if (!f) { bufs[key] = null; return Promise.resolve(); }
+        return new Promise(function (resolve) {
+          var r = new FileReader();
+          r.onload = function () { bufs[key] = new Uint8Array(r.result); resolve(); };
+          r.onerror = function () { bufs[key] = null; resolve(); };
+          r.readAsArrayBuffer(f);
+        });
+      }
+      function tryDiff() {
+        if (!bufs.a || !bufs.b) return;
+        try {
+          out.innerHTML = P66.renderDiffHTML(P66.diffBins(bufs.a, bufs.b));
+        } catch (derr) {
+          out.innerHTML = '<p class="status-warn">' + esc(derr && derr.message ? derr.message : derr) + '</p>';
+        }
+      }
+      aIn.addEventListener('change', function () { readBin(aIn, 'a').then(tryDiff); });
+      bIn.addEventListener('change', function () { readBin(bIn, 'b').then(tryDiff); });
+    })();
+
     var veCompare = document.getElementById('ve-compare');
     if (veCompare && typeof P66.renderVeComparison === 'function' && xdfCatalog && binBytes) {
       try {
@@ -1345,6 +1585,20 @@
         veCompare.innerHTML = '<p class="muted">VE table render failed: ' +
           esc(verr && verr.message ? verr.message : verr) + '</p>';
       }
+    }
+
+    // Spark tab source: same delegation pattern as the VE comparison above.
+    // The spark panel renders from this on the next dashboard render; the
+    // knock overlay falls back to the analysis report when knockReport is null.
+    if (typeof P66.setSparkVizSource === 'function' && xdfCatalog && binBytes) {
+      try {
+        P66.setSparkVizSource({
+          catalog: xdfCatalog,
+          binBytes: binBytes,
+          patches: lastPatches ? lastPatches.patches : [],
+          knockReport: (result && result.knock) ? result.knock : null
+        });
+      } catch (serr) { /* spark tab keeps its empty state */ }
     }
 
     var dlBtn = document.getElementById('download-bin-btn');
@@ -1401,6 +1655,65 @@
       writeConsole('Tune generation failed: ' + (err && err.message ? err.message : err));
     }
   });
+
+  // Item 16: side-by-side mode comparison (informational — never applies anything).
+  document.getElementById('compare-modes-btn').addEventListener('click', function () {
+    if (!sessionReport) {
+      writeConsole('Compare blocked: run analysis first.');
+      return;
+    }
+    var cmpOut = document.getElementById('compare-results');
+    if (typeof P66.compareModes !== 'function' || typeof P66.renderModeCompareHTML !== 'function') {
+      if (cmpOut) cmpOut.innerHTML = '<p class="muted">Mode compare not loaded (js/mode-compare.js).</p>';
+      return;
+    }
+    try {
+      var comp = P66.compareModes(sessionReport, { catalog: xdfCatalog });
+      if (cmpOut) cmpOut.innerHTML = P66.renderModeCompareHTML(comp);
+      writeConsole('Mode comparison ready (informational only — nothing applied).');
+    } catch (err) {
+      writeConsole('Compare failed: ' + (err && err.message ? err.message : err));
+    }
+  });
+
+  // Item 15: first-run guided wizard. Shows once (localStorage p66-wizard-seen);
+  // hands picked files into the normal pipeline via the existing handlers.
+  (function initWizard() {
+    if (typeof P66.createWizard !== 'function' || typeof P66.wizardSeen !== 'function') return;
+    try { if (P66.wizardSeen()) return; } catch (e) { return; }
+    var overlay = document.createElement('div');
+    overlay.className = 'p66wiz-overlay';
+    overlay.innerHTML = '<div class="p66wiz-card" id="wizard-mount"></div>';
+    document.body.appendChild(overlay);
+    function dismiss() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    P66.createWizard(overlay.querySelector('#wizard-mount'), {
+      onFilesReady: function (payload) {
+        try {
+          if (payload.logFiles && payload.logFiles.length) onLogFilesPicked({ files: payload.logFiles });
+          if (payload.binFile) {
+            files.bin = payload.binFile;
+            readBinaryFile(payload.binFile).then(function (bytes) {
+              binBytes = bytes;
+              lastPatches = null;
+              refreshSummary();
+              writeConsole('BIN loaded: ' + bytes.length + ' bytes.');
+            }).catch(function (err) {
+              writeConsole('Failed to read BIN file: ' + err);
+            });
+          }
+        } catch (e) {
+          writeConsole('Wizard file handoff failed: ' + (e && e.message ? e.message : e));
+        }
+      },
+      onModeSelect: function (mode) {
+        var modeSel = document.getElementById('mode');
+        if (modeSel) modeSel.value = mode;
+        writeConsole('Wizard: ' + mode + ' mode selected. Run Analyze, then Generate Tune Suggestions.');
+        dismiss();
+      },
+      onSkip: dismiss
+    });
+  })();
 
   refreshSummary();
   renderMappingPreview();

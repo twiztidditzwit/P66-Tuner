@@ -141,16 +141,6 @@
   }
 
   /**
-   * STFT/LTFT fallbacks: prefer bank-specific, else generic.
-   */
-  function fuelTrimColumns(mapResult) {
-    return {
-      stft: columnFor(mapResult, 'STFT_B1') || columnFor(mapResult, 'STFT'),
-      ltft: columnFor(mapResult, 'LTFT_B1') || columnFor(mapResult, 'LTFT')
-    };
-  }
-
-  /**
    * Per-bank trim column pairs. Averages across banks when both are present.
    */
   function fuelTrimBanks(mapResult) {
@@ -188,10 +178,8 @@
     return v;
   }
 
-  P66.SIGNAL_ALIASES = SIGNAL_ALIASES;
   P66.mapChannels = mapChannels;
   P66.columnFor = columnFor;
-  P66.fuelTrimColumns = fuelTrimColumns;
   P66.fuelTrimBanks = fuelTrimBanks;
   P66.detectTrimStyle = detectTrimStyle;
   P66.trimToPct = trimToPct;

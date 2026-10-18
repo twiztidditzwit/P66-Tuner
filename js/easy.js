@@ -97,7 +97,7 @@
           }
           var sigs = foundSignals(mapResult);
           info.innerHTML = '<p class="status-ok"><strong>' + esc(file.name) + '</strong> — ' +
-            parsed.rows.length.toLocaleString('en-US') + ' rows.</p>' +
+            parsed.rowCount.toLocaleString('en-US') + ' rows.</p>' +
             '<p class="muted">Found: ' + esc(sigs.join(', ') || 'basic channels') + '.</p>';
           markStep(1, true);
         }

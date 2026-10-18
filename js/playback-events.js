@@ -45,32 +45,36 @@
    * Build the per-row timestamp array, following the playback convention.
    * Uses P66.pbBuildTimes when available (js/playback.js); otherwise falls
    * back to row-index timing. Returns { times, indexed }.
+   * rows: a log table or a legacy array of row objects.
    */
   function eventTimes(rows, mapResult) {
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
     var timeCol = (typeof P66.columnFor === 'function')
       ? P66.columnFor(mapResult, 'TIME') : null;
     if (typeof P66.pbBuildTimes === 'function') {
-      var tb = P66.pbBuildTimes(rows, timeCol);
+      var tb = P66.pbBuildTimes(t, timeCol);
       return { times: tb.times, indexed: tb.indexed };
     }
-    var times = new Array(rows.length);
-    if (timeCol) {
+    var times = new Array(n);
+    var tc = P66.numView(t, timeCol);
+    if (tc) {
       var ok = 0;
-      for (var i = 0; i < rows.length; i++) {
-        var t = evNum(rows[i][timeCol]);
-        times[i] = (t === null) ? NaN : t;
-        if (t !== null) ok++;
+      for (var i = 0; i < n; i++) {
+        var tv = tc[i];
+        times[i] = (tv === tv) ? tv : NaN;
+        if (tv === tv) ok++;
       }
-      if (ok >= rows.length * 0.9) {
+      if (ok >= n * 0.9) {
         var last = times[0];
         for (var k = 0; k < times.length; k++) {
-          if (isFinite(times[k])) last = times[k];
+          if (times[k] === times[k]) last = times[k];
           else times[k] = last;
         }
         return { times: times, indexed: false };
       }
     }
-    for (var j = 0; j < rows.length; j++) times[j] = j;
+    for (var j = 0; j < n; j++) times[j] = j;
     return { times: times, indexed: true };
   }
 
@@ -130,15 +134,18 @@
    * PE_EPISODE_MIN samples are dropped. For each episode, records the PE
    * engagement delay in samples (null when PE never engaged).
    * Returns [{ startIdx, peDelaySamples }].
+   * rows: a log table or a legacy array of row objects.
    */
   function peEpisodeIndices(rows, mapResult) {
-    var tpsCol = (typeof P66.columnFor === 'function')
-      ? P66.columnFor(mapResult, 'TPS') : null;
-    var cmdCol = (typeof P66.columnFor === 'function')
-      ? P66.columnFor(mapResult, 'CMD_LAMBDA') : null;
-    if (!tpsCol || !cmdCol) return [];
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var tpsC = (typeof P66.columnFor === 'function')
+      ? P66.numView(t, P66.columnFor(mapResult, 'TPS')) : null;
+    var cmdC = (typeof P66.columnFor === 'function')
+      ? P66.numView(t, P66.columnFor(mapResult, 'CMD_LAMBDA')) : null;
+    if (!tpsC || !cmdC) return [];
     function toLambda(v) {
-      if (v === null) return null;
+      if (v === null || v === undefined || v !== v) return null;
       if (typeof P66.toLambda === 'function') return P66.toLambda(v);
       if (v > 5) return v / 14.7;
       if (v > 0.3 && v < 2.5) return v;
@@ -149,8 +156,8 @@
     function close() {
       if (startIdx >= 0 && samples >= PE_EPISODE_MIN) {
         var peAt = null;
-        for (var j = startIdx; j < startIdx + samples && j < rows.length; j++) {
-          var lambda = toLambda(evNum(rows[j][cmdCol]));
+        for (var j = startIdx; j < startIdx + samples && j < n; j++) {
+          var lambda = toLambda(cmdC[j]);
           if (lambda !== null && lambda < PE_LAMBDA_MAX) { peAt = j; break; }
         }
         episodes.push({
@@ -161,9 +168,9 @@
       startIdx = -1;
       samples = 0;
     }
-    for (var i = 0; i < rows.length; i++) {
-      var tps = evNum(rows[i][tpsCol]);
-      if (tps !== null && tps >= PE_TPS_MIN) {
+    for (var i = 0; i < n; i++) {
+      var tps = tpsC[i];
+      if (tps === tps && tps >= PE_TPS_MIN) {
         if (startIdx < 0) { startIdx = i; samples = 0; }
         samples++;
       } else {
@@ -188,23 +195,25 @@
 
   /**
    * Compute playback events from the three analyzers.
+   * parsedLog: a log table, a legacy { rows: [...] } parsed shape, or a
+   * legacy row-object array.
    * Returns [{ index, time, type, label }] sorted by index, then type.
    * Missing/unusable analyzers are skipped silently.
    */
   function computePlaybackEvents(parsedLog, mapResult) {
-    var rows = (parsedLog && parsedLog.rows) || [];
-    if (!rows.length) return [];
-    var tb = eventTimes(rows, mapResult);
+    var t = P66.asTable(parsedLog);
+    if (!t || !t.rowCount) return [];
+    var tb = eventTimes(t, mapResult);
 
     var events = [];
-    var kr = tryAnalyzer('analyzeKnock', rows, mapResult);
+    var kr = tryAnalyzer('analyzeKnock', t, mapResult);
     if (kr) events = events.concat(knockEventsOf(kr));
-    var ti = tryAnalyzer('analyzeTipIn', rows, mapResult);
+    var ti = tryAnalyzer('analyzeTipIn', t, mapResult);
     if (ti) events = events.concat(tipInEventsOf(ti));
-    var pe = tryAnalyzer('analyzePeEntry', rows, mapResult);
-    if (pe) events = events.concat(peEventsOf(peEpisodeIndices(rows, mapResult)));
+    var pe = tryAnalyzer('analyzePeEntry', t, mapResult);
+    if (pe) events = events.concat(peEventsOf(peEpisodeIndices(t, mapResult)));
 
-    var n = rows.length;
+    var n = t.rowCount;
     events.forEach(function (ev) {
       ev.index = Math.max(0, Math.min(n - 1, ev.index));
       ev.time = tb.times[ev.index];
@@ -242,12 +251,35 @@
   }
 
   /**
+   * Item 11: knock event drill-down modal. drill = { table, mapResult, krScale }.
+   * Shows a zoomed ±50-sample window (RPM, MAP, KR, spark, TPS) around the tick.
+   */
+  function openKnockDrilldown(ev, drill) {
+    if (typeof P66.knockEventWindow !== 'function' || typeof P66.renderKnockDrilldownHTML !== 'function') return;
+    var win;
+    try {
+      win = P66.knockEventWindow(drill.table, drill.mapResult, ev.index, 50, drill.krScale || 1);
+    } catch (e) { return; }
+    var overlay = document.createElement('div');
+    overlay.className = 'p66-modal-overlay';
+    overlay.innerHTML =
+      '<div class="p66-modal" role="dialog" aria-label="Knock event drill-down">' +
+      '<button type="button" class="p66-modal-close" aria-label="Close">×</button>' +
+      '<div class="p66-modal-body"></div></div>';
+    overlay.querySelector('.p66-modal-body').innerHTML = P66.renderKnockDrilldownHTML(win);
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    overlay.querySelector('.p66-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    document.body.appendChild(overlay);
+  }
+
+  /**
    * Render the event tick strip into container, wired to a playback
    * controller (from P66.createPlaybackController / P66.renderPlayback).
    * Re-rendering clears the previous strip and unsubscribes it.
    * Returns the controller (or null when nothing could render).
    */
-  function renderEventTicks(container, controller, events) {
+  function renderEventTicks(container, controller, events, drill) {
     if (typeof document === 'undefined') return null;
     if (!container) return null;
     if (container._evUnsub) { container._evUnsub(); container._evUnsub = null; }
@@ -294,7 +326,13 @@
       b.style.left = eventTickPct(ev.time, tMin, tMax) + '%';
       b.title = ev.label;
       b.setAttribute('aria-label', ev.label);
-      b.addEventListener('click', function () { controller.seek(ev.index); });
+      b.addEventListener('click', function () {
+        controller.seek(ev.index);
+        // Item 11: knock ticks also open the drill-down window.
+        if (ev.type === 'knock' && drill && typeof P66.knockEventWindow === 'function') {
+          openKnockDrilldown(ev, drill);
+        }
+      });
       strip.appendChild(b);
       return { el: b, ev: ev };
     });
@@ -313,11 +351,6 @@
     return controller;
   }
 
-  P66.EV_TYPES = EV_TYPES;
-  P66.EV_NAMES = EV_NAMES;
-  P66.PE_TICK_TPS_MIN = PE_TPS_MIN;
-  P66.PE_TICK_EPISODE_MIN = PE_EPISODE_MIN;
-  P66.eventTimes = eventTimes;
   P66.peEpisodeIndices = peEpisodeIndices;
   P66.eventTickPct = eventTickPct;
   P66.nearestEventAtOrBelow = nearestEventAtOrBelow;

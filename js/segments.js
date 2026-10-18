@@ -62,10 +62,6 @@
     { key: 'other',  label: 'Other' }
   ];
 
-  function num(v) {
-    return (typeof v === 'number' && isFinite(v)) ? v : null;
-  }
-
   /**
    * Classify one sample. Returns one of the SEGMENTS keys.
    * Missing/non-numeric RPM, TPS or VSS -> 'other' (never throws).
@@ -83,12 +79,17 @@
   // ---- trim handling (128-count units, centered at 128) ----
 
   // Sample up to max numeric values from a column for encoding detection.
-  function sampleValues(rows, col, max) {
+  // Accepts a log table or a legacy row-object array.
+  function sampleValues(rows, name, max) {
     max = max || 500;
     var out = [];
-    for (var i = 0; i < rows.length && out.length < max; i++) {
-      var v = num(rows[i][col]);
-      if (v !== null) out.push(v);
+    var t = P66.asTable(rows);
+    if (!t) return out;
+    var c = P66.numView(t, name);
+    if (!c) return out;
+    for (var i = 0; i < t.rowCount && out.length < max; i++) {
+      var v = c[i];
+      if (v === v) out.push(v);
     }
     return out;
   }
@@ -104,19 +105,20 @@
    * Combined trim for one bank on one row, in 128-count units centered
    * at 128. Unmapped channels contribute neutrally (128); a non-numeric
    * value on a mapped channel means "no data this row" -> returns null.
+   * t: log table; i: row index; cols: { stft, ltft } Float32Arrays (or null).
    */
-  function bankCombined(row, bank, style) {
+  function bankCombinedAt(t, i, cols, style) {
     var total = -128; // each mapped channel adds ~128 at stoich
     var mapped = 0;
     var chans = [
-      bank.stft ? { col: bank.stft, style: style.stft } : null,
-      bank.ltft ? { col: bank.ltft, style: style.ltft } : null
+      cols.stft ? { c: cols.stft, style: style.stft } : null,
+      cols.ltft ? { c: cols.ltft, style: style.ltft } : null
     ];
-    for (var i = 0; i < chans.length; i++) {
-      if (!chans[i]) continue;
-      var v = num(row[chans[i].col]);
-      if (v === null) return null;
-      total += toCount128(v, chans[i].style);
+    for (var k = 0; k < chans.length; k++) {
+      if (!chans[k]) continue;
+      var v = chans[k].c[i];
+      if (v !== v) return null;
+      total += toCount128(v, chans[k].style);
       mapped++;
     }
     return mapped ? total : null;
@@ -128,24 +130,29 @@
 
   /**
    * P66.analyzeSegments(rows, mapResult)
+   * rows: a log table or a legacy array of row objects.
    * Returns [{ key, label, share, samples, avgTrimB1, avgTrimB2 }] in the
-   * SEGMENTS order. share = samples / rows.length. avgTrimB1/avgTrimB2 are
+   * SEGMENTS order. share = samples / rowCount. avgTrimB1/avgTrimB2 are
    * the mean combined trim (STFT+LTFT, 128-count units) per segment, or
    * null when that bank has no mapped trim channel.
    */
   function analyzeSegments(rows, mapResult) {
-    rows = rows || [];
-    var rpmCol = mapResult ? P66.columnFor(mapResult, 'RPM') : null;
-    var tpsCol = mapResult ? P66.columnFor(mapResult, 'TPS') : null;
-    var vssCol = mapResult ? P66.columnFor(mapResult, 'VSS') : null;
+    var t = P66.asTable(rows) || P66.tableFromRows([]);
+    var n = t.rowCount;
+    var rpmC = P66.numView(t, mapResult ? P66.columnFor(mapResult, 'RPM') : null);
+    var tpsC = P66.numView(t, mapResult ? P66.columnFor(mapResult, 'TPS') : null);
+    var vssC = P66.numView(t, mapResult ? P66.columnFor(mapResult, 'VSS') : null);
 
     var banks = (mapResult && typeof P66.fuelTrimBanks === 'function')
       ? P66.fuelTrimBanks(mapResult) : [];
     var styles = banks.map(function (b) {
       return {
-        stft: b.stft ? P66.detectTrimStyle(sampleValues(rows, b.stft)) : 'percent',
-        ltft: b.ltft ? P66.detectTrimStyle(sampleValues(rows, b.ltft)) : 'percent'
+        stft: b.stft ? P66.detectTrimStyle(sampleValues(t, b.stft)) : 'percent',
+        ltft: b.ltft ? P66.detectTrimStyle(sampleValues(t, b.ltft)) : 'percent'
       };
+    });
+    var bankCols = banks.map(function (b) {
+      return { stft: P66.numView(t, b.stft), ltft: P66.numView(t, b.ltft) };
     });
 
     var acc = {};
@@ -153,25 +160,24 @@
       acc[s.key] = { samples: 0, b1sum: 0, b1n: 0, b2sum: 0, b2n: 0 };
     });
 
-    rows.forEach(function (row) {
+    for (var i = 0; i < n; i++) {
       var key = classifySegment(
-        rpmCol ? num(row[rpmCol]) : null,
-        tpsCol ? num(row[tpsCol]) : null,
-        vssCol ? num(row[vssCol]) : null
+        rpmC ? (rpmC[i] !== rpmC[i] ? null : rpmC[i]) : null,
+        tpsC ? (tpsC[i] !== tpsC[i] ? null : tpsC[i]) : null,
+        vssC ? (vssC[i] !== vssC[i] ? null : vssC[i]) : null
       );
       var a = acc[key];
       a.samples++;
       if (banks[0]) {
-        var t1 = bankCombined(row, banks[0], styles[0]);
+        var t1 = bankCombinedAt(t, i, bankCols[0], styles[0]);
         if (t1 !== null) { a.b1sum += t1; a.b1n++; }
       }
       if (banks[1]) {
-        var t2 = bankCombined(row, banks[1], styles[1]);
+        var t2 = bankCombinedAt(t, i, bankCols[1], styles[1]);
         if (t2 !== null) { a.b2sum += t2; a.b2n++; }
       }
-    });
+    }
 
-    var n = rows.length;
     return SEGMENTS.map(function (s) {
       var a = acc[s.key];
       return {

@@ -60,7 +60,8 @@ var rows3 = [];
 for (var q = 0; q < 10; q++) rows3.push({ t: (q * 0.2).toFixed(1) });
 rows3[4].t = 'bad';
 var tb3 = P66.pbBuildTimes(rows3, 't');
-check('pbBuildTimes fills single gap', !tb3.indexed && tb3.times[4] === 0.6);
+check('pbBuildTimes fills single gap', !tb3.indexed && Math.abs(tb3.times[4] - 0.6) < 1e-6,
+  String(tb3.times[4]));
 
 // ---- row index search ----
 check('pbRowIndexAt start', P66.pbRowIndexAt(tb.times, 0) === 0);
@@ -103,6 +104,43 @@ check('pbValueColor blue above 128', P66.pbValueColor(gc, 150) === '#6b9bff');
 check('pbValueColor neutral at exactly 128', P66.pbValueColor(gc, 128) === '#eef1f6');
 check('pbValueColor default on NaN', P66.pbValueColor(gc, NaN) === '#eef1f6');
 check('pbValueColor default on null', P66.pbValueColor(gc, null) === '#eef1f6');
+
+// ---- playback controller ----
+var ctlRows = [];
+for (var ci = 0; ci < 50; ci++) ctlRows.push({ t: (ci * 0.2).toFixed(1), rpm: 800 + ci * 10 });
+var ctlMap = { mapping: {
+  TIME: { column: 't' }, RPM: { column: 'rpm' }, CMD_LAMBDA: { column: 'afr' }
+}, unmapped: [] };
+check('createPlaybackController null on empty', P66.createPlaybackController({ rows: [] }, ctlMap) === null);
+var ctl = P66.createPlaybackController({ rows: ctlRows }, ctlMap);
+check('controller exposes table/times', ctl.table.rowCount === 50 && ctl.times.length === 50);
+check('controller initial index 0', ctl.getIndex() === 0);
+check('controller initial state paused', ctl.getState().playing === false && ctl.getState().speed === 1);
+var seen = [];
+var unsub = ctl.onFrame(function (idx) { seen.push(idx); });
+ctl.seek(10);
+check('seek moves index and emits', ctl.getIndex() === 10 && seen[seen.length - 1] === 10);
+ctl.seek(9999);
+check('seek clamps to last row', ctl.getIndex() === 49);
+ctl.seek(-5);
+check('seek clamps to first row', ctl.getIndex() === 0);
+unsub();
+var nBefore = seen.length;
+ctl.seek(20);
+check('unsubscribe stops notifications', seen.length === nBefore && ctl.getIndex() === 20);
+var rpmGi = P66.HUD_GAUGES.findIndex(function (g) { return g.signal === 'RPM'; });
+check('valueAt returns gauge value', P66.createPlaybackController && ctl.valueAt(rpmGi, 5) === 850);
+var afrGi = P66.HUD_GAUGES.findIndex(function (g) { return g.signal === 'CMD_LAMBDA'; });
+ctlRows[5].afr = '1.0';
+// Columnar storage snapshots at creation: rebuild the controller to pick
+// up the late-added channel, then verify the lambda->AFR conversion.
+var ctl2 = P66.createPlaybackController({ rows: ctlRows }, ctlMap);
+check('valueAt converts lambda to AFR', Math.abs(ctl2.valueAt(afrGi, 5) - 14.7) < 1e-9);
+check('valueAt NaN on unmapped gauge', isNaN(ctl.valueAt(P66.HUD_GAUGES.findIndex(function (g) { return g.signal === 'KR'; }), 5)));
+ctl.setSpeed(2);
+check('setSpeed updates state', ctl.getState().speed === 2);
+ctl.stop();
+check('stop pauses', ctl.getState().playing === false);
 
 console.log(checks + ' checks, ' + failures + ' failures.');
 process.exit(failures ? 1 : 0);

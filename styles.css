@@ -99,6 +99,34 @@ h2 {
   color: var(--muted);
 }
 
+/* Multi-log session chips (log-merge UI). */
+.session-logs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.session-logs[hidden] {
+  display: none;
+}
+.log-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #3d4a5f;
+  border-radius: 999px;
+  background: #10161f;
+  padding: 0.3rem 0.35rem 0.3rem 0.8rem;
+  font-size: 0.9rem;
+}
+.log-chip button {
+  width: auto;
+  margin-top: 0;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
 .drop-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -587,4 +615,308 @@ footer.container {
   height: 30px;
   display: block;
   margin: 0.15rem 0;
+}
+
+/* ---- Analysis progress bar (async worker path) ---- */
+.progress-wrap {
+  margin-top: 0.6rem;
+}
+.progress-track {
+  height: 10px;
+  border-radius: 6px;
+  border: 1px solid #3d4a5f;
+  background: #10161f;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 6px;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.progress-label {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+}
+
+/* === RESPONSIVE (item 5) ===
+ * Layout-only reflow for tablet/phone (the user is often at the car or
+ * junkyard). Breakpoints tuned to this app's actual layout:
+ *   .container      — dashboard card grid (auto-fit 280px columns)
+ *   .pb-grid        — playback HUD 4x4 gauge grid (see pre-existing
+ *                     ≤900px rule earlier in this file: → 2 columns)
+ *   .tabs           — dashboard category tab bar (6 buttons)
+ *   .ve-grid-box    — VE table grid (overflow-x scrolls inside the card)
+ *   .pb-transport   — play / scrub / time / speed row
+ *   .sc-*           — strip charts (styles/stripcharts.css)
+ *   .p66-events-*   — playback event tick strip (styles/playback-events.css)
+ *
+ * Deliberately untouched: dark theme palette, .bg-video-wrap video
+ * background, .rain-canvas rain/wiper layers, prefers-reduced-motion
+ * fallbacks, and every fuel-trim color (JS-driven: blue = lean/add,
+ * red = rich/remove). Nothing functional is hidden at any width —
+ * rules only reflow, shrink, or scroll.
+ */
+
+/* ---- ≤900px: tablet ---- */
+@media (max-width: 900px) {
+  /* Dashboard card grid → single column (grid-span-2 → span 1 is
+     already handled by the earlier ≤900px rule). */
+  .container {
+    grid-template-columns: 1fr;
+  }
+
+  /* Playback HUD: keep the pre-existing 2-column tile grid from the
+     earlier ≤900px rule, but let the transport row wrap so the scrubber
+     keeps a usable width instead of being squeezed to nothing. */
+  .pb-transport {
+    flex-wrap: wrap;
+  }
+  .pb-scrub {
+    flex: 1 1 12rem;
+    min-width: 10rem;
+  }
+  .pb-time {
+    margin-left: auto;
+  }
+
+  /* Strip charts: full-width stacked lanes (they already stack;
+     just make sure the wrap can't squeeze them). */
+  .sc-wrap {
+    max-width: 100%;
+  }
+
+  /* VE table grid scrolls horizontally INSIDE its card — never widens
+     the page. -webkit prefix keeps iOS momentum scrolling. */
+  .ve-grid-box {
+    overflow-x: auto;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Grid items default to min-width: auto, which lets wide children
+     (tables, canvases) push the page wider than the viewport. */
+  .card {
+    min-width: 0;
+  }
+
+  /* Topbar condenses a notch. */
+  .topbar {
+    padding: 0.8rem 1rem;
+  }
+  .topbar h1 {
+    font-size: 1.3rem;
+  }
+  .topbar p {
+    font-size: 0.9rem;
+  }
+
+  /* Dashboard tab bar: keep wrapping; tabs stay fully visible. */
+  .tabs {
+    gap: 0.5rem;
+  }
+}
+
+/* ---- ≤600px: phone ---- */
+@media (max-width: 600px) {
+  /* No page-level horizontal scroll, ever. Fixed layers (.bg-video-wrap,
+     .rain-canvas) are unaffected by overflow-x on body. */
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  .container {
+    margin: 0.75rem auto;
+    padding: 0 0.75rem 1.5rem;
+    gap: 0.75rem;
+  }
+
+  .card {
+    padding: 0.85rem;
+    border-radius: 10px;
+  }
+
+  /* Single-column everything: dropzone grid, and any other auto-fit
+     grids used by feature panels. */
+  .drop-grid,
+  .o2h-cards {
+    grid-template-columns: 1fr;
+  }
+
+  /* Topbar condenses further. */
+  .topbar {
+    padding: 0.65rem 0.85rem;
+  }
+  .topbar h1 {
+    font-size: 1.15rem;
+  }
+  .topbar p {
+    font-size: 0.82rem;
+    margin-top: 0.25rem;
+  }
+
+  /* Headings step down slightly. */
+  h2 {
+    font-size: 1rem;
+  }
+
+  /* Tab buttons scroll horizontally instead of stacking into a tall
+     column. flex:none keeps each button at its natural width. */
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.6rem;
+  }
+  .tabs button {
+    flex: none;
+  }
+
+  /* Playback HUD: keep 2 columns but shrink the gauge cards. */
+  .pb-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .pb-tile {
+    min-height: 4.25rem;
+    padding: 0.4rem 0.2rem 0.35rem;
+  }
+  .pb-value {
+    font-size: 1.35rem;
+  }
+  .pb-label {
+    font-size: 0.66rem;
+  }
+
+  /* Touch targets ≥44px for buttons and the scrubber. The play button
+     is 2.6rem (≈41.6px) on desktop — bump it to 44px on phone. */
+  button,
+  input,
+  select {
+    min-height: 44px;
+  }
+  .tabs button,
+  .ve-toggle button,
+  .mode-btn,
+  .pb-speed-btn,
+  .log-chip button {
+    min-height: 44px;
+  }
+  .pb-play {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .pb-scrub {
+    min-height: 44px;
+    flex-basis: 100%;
+  }
+  .pb-speed {
+    flex-wrap: wrap;
+  }
+
+  /* Playback timeline: the event-tick strip is 28px tall on desktop —
+     raise it to a tappable 44px without hiding any ticks.
+     (#event-ticks scoping wins over styles/playback-events.css,
+     which loads after this file.) */
+  #event-ticks .p66-events-strip {
+    height: 44px;
+  }
+  #event-ticks .p66-events-legend {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Strip-chart lane canvases get explicit pixel heights from JS
+     (js/stripcharts.js), so they can't collapse to zero; guard the
+     axis canvas the same way and keep the plot from squeezing out. */
+  #stripcharts .sc-plot {
+    min-width: 0;
+  }
+
+  /* 3D VE surface canvas: JS sets width:100% + height:auto from its
+     620x440 backing store, so aspect is preserved — just keep it
+     inside the card. */
+  .ve-grid-box canvas {
+    max-width: 100%;
+  }
+
+  /* Wide data tables (channel mapping, compare, journal) scroll inside
+     their card instead of pushing the page sideways. */
+  .card table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Region breakdown rows: narrower fixed columns keep the bar usable. */
+  .region-row {
+    grid-template-columns: 64px 1fr 84px;
+    gap: 0.45rem;
+    font-size: 0.85rem;
+  }
+
+  /* Step headers and session chips wrap cleanly. */
+  .step h3 {
+    font-size: 1rem;
+  }
+  .log-chip {
+    font-size: 0.82rem;
+  }
+}
+
+/* === MODAL (knock drill-down, item 11) === */
+.p66-modal-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(4, 8, 14, 0.72);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.p66-modal {
+  position: relative;
+  max-width: 640px; width: 100%;
+  max-height: 88vh; overflow: auto;
+  background: #0d1420;
+  border: 1px solid #2a3648; border-radius: 10px;
+  padding: 1rem 1.2rem;
+}
+.p66-modal-close {
+  position: absolute; top: 0.4rem; right: 0.6rem;
+  font-size: 1.4rem; line-height: 1;
+  background: none; border: none; color: #9aa4b2; cursor: pointer;
+}
+.p66-modal-close:hover { color: #e6e9ef; }
+
+/* === WIZARD (first-run, item 15) === */
+.p66wiz { max-width: 560px; margin: 0 auto; }
+.p66wiz-dots { margin: 0.5rem 0 1rem; }
+.p66wiz-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  background: #2a3648; margin-right: 6px;
+}
+.p66wiz-dot.active { background: #6b9bff; }
+.p66wiz-drop {
+  border: 2px dashed #2a3648; border-radius: 8px;
+  padding: 1.4rem 1rem; text-align: center; margin: 0.8rem 0;
+  cursor: pointer;
+}
+.p66wiz-drop:hover { border-color: #6b9bff; }
+.p66wiz-mode {
+  display: block; width: 100%; text-align: left;
+  border: 1px solid #2a3648; border-radius: 8px;
+  background: #101826; color: #e6e9ef;
+  padding: 0.8rem 1rem; margin: 0.5rem 0; cursor: pointer;
+}
+.p66wiz-mode.selected { border-color: #6b9bff; background: #14203a; }
+.p66wiz-nav { display: flex; justify-content: space-between; margin-top: 1rem; }
+.p66wiz-overlay {
+  position: fixed; inset: 0; z-index: 70;
+  background: rgba(4, 8, 14, 0.86);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 4rem 1rem 1rem; overflow: auto;
+}
+.p66wiz-card {
+  background: #0d1420; border: 1px solid #2a3648; border-radius: 12px;
+  padding: 1.5rem 1.6rem; max-width: 600px; width: 100%;
 }

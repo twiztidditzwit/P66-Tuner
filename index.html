@@ -13,6 +13,20 @@
     <link rel="stylesheet" href="styles/segments.css" />
     <link rel="stylesheet" href="styles/vepoints.css" />
     <link rel="stylesheet" href="styles/xdf-library.css" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#10151d" />
+    <script>
+    try {
+      if ('serviceWorker' in navigator &&
+          (location.protocol === 'https:' ||
+           location.hostname === 'localhost' ||
+           location.hostname === '127.0.0.1')) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('sw.js').catch(function () {});
+        });
+      }
+    } catch (e) { /* SW unavailable — app still runs fully unregistered */ }
+    </script>
   </head>
   <body>
     <div class="bg-video-wrap" aria-hidden="true">
@@ -91,10 +105,12 @@
 
           <label class="dropzone" for="log-input">
             <span>Log File</span>
-            <small>.csv / .tsv</small>
-            <input id="log-input" type="file" accept=".csv,.tsv,.txt" />
+            <small>.csv / .tsv — select several to merge into one session</small>
+            <input id="log-input" type="file" accept=".csv,.tsv,.txt" multiple />
           </label>
         </div>
+
+        <div id="session-logs" class="session-logs" hidden></div>
 
         <div class="xdf-library-row">
           <label>
@@ -145,6 +161,13 @@
           <button id="validate-btn">Validate Inputs</button>
           <button id="analyze-btn">Analyze Log</button>
           <button id="tune-btn">Generate Tune Suggestions</button>
+          <button id="compare-modes-btn">Compare Modes</button>
+        </div>
+        <div id="compare-results"></div>
+        <p class="muted" id="merge-summary" aria-live="polite"></p>
+        <div id="analyze-progress" class="progress-wrap" hidden>
+          <div class="progress-track"><div id="analyze-progress-bar" class="progress-bar"></div></div>
+          <div id="analyze-progress-label" class="progress-label muted">Analyzing…</div>
         </div>
       </section>
 
@@ -208,6 +231,7 @@
           <button type="button" role="tab" data-tab="coverage" aria-selected="false">Coverage</button>
           <button type="button" role="tab" data-tab="trans" aria-selected="false">Trans</button>
           <button type="button" role="tab" data-tab="history" aria-selected="false">History</button>
+          <button type="button" role="tab" data-tab="spark" aria-selected="false">Spark</button>
         </div>
         <div class="tab-panel active" data-panel="fuel" role="tabpanel">
           <p class="muted tab-desc">Where the engine runs rich or lean, cell by cell.</p>
@@ -286,11 +310,18 @@
     </footer>
 
     <script src="js/log-parser.js"></script>
+    <script src="js/log-merge.js"></script>
     <script src="js/channel-mapper.js"></script>
     <script src="js/analyzer.js"></script>
+    <script src="js/ae-scatter.js"></script>
+    <script src="js/shift-histograms.js"></script>
+    <script src="js/analyze-async.js"></script>
     <script src="js/coverage.js"></script>
     <script src="js/tuner.js"></script>
+    <script src="js/mode-compare.js"></script>
+    <script src="js/lazy.js"></script>
     <script src="js/dashboard.js"></script>
+    <script src="js/trim-heatmap.js"></script>
     <script src="js/xdf-map.js"></script>
     <script src="js/verify.js"></script>
     <script src="js/provenance.js"></script>
@@ -298,18 +329,21 @@
     <script src="js/safety.js"></script>
     <script src="js/summary.js"></script>
     <script src="js/ledger.js"></script>
+    <script src="js/patch-preview.js"></script>
     <script src="js/journal.js"></script>
     <script src="js/altitude.js"></script>
     <script src="js/playback.js"></script>
+    <script src="js/engine-sound.js"></script>
     <script src="js/stripcharts.js"></script>
     <script src="js/playback-events.js"></script>
+    <script src="js/knock-drilldown.js"></script>
     <script src="js/sparklines.js"></script>
-    <script src="js/compare.js"></script>
     <script src="js/o2health.js"></script>
-    <script src="js/report.js"></script>
     <script src="js/segments.js"></script>
     <script src="js/xdf-library.js"></script>
+    <script src="js/wizard.js"></script>
     <script src="js/bundled-catalog.js"></script>
+    <script src="js/bindiff.js"></script>
     <script src="js/easy.js"></script>
     <script src="app.js"></script>
   </body>

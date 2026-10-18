@@ -29,18 +29,6 @@
 
   // ---------------------------------------------------------------- numbers
 
-  function toNum(v) {
-    if (v === null || v === undefined) return null;
-    if (typeof v === 'number') return isFinite(v) ? v : null;
-    if (typeof v === 'string') {
-      var t = v.trim();
-      if (t === '') return null;
-      var n = parseFloat(t);
-      return isFinite(n) ? n : null;
-    }
-    return null;
-  }
-
   function round1(v) { return Math.round(v * 10) / 10; }
 
   function colFor(mapResult, signal) {
@@ -100,30 +88,34 @@
   // Mean combined (STFT + LTFT) trim in 128-count units for one bank.
   // Combined = stftCounts + ltftCounts - 128; a missing side counts as 128
   // (no correction). Null when neither trim channel exists or no rows
-  // carry a value.
+  // carry a value. t: log table (or legacy input, normalized once).
   function meanBankTrim(rows, bank) {
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var stftC = t ? P66.numView(t, bank.stft) : null;
+    var ltftC = t ? P66.numView(t, bank.ltft) : null;
     var stftVals = [], ltftVals = [];
-    var cap = Math.min(rows.length, 2000);
+    var cap = Math.min(n, 2000);
     for (var i = 0; i < cap; i++) {
-      var s = bank.stft ? toNum(rows[i][bank.stft]) : null;
-      var l = bank.ltft ? toNum(rows[i][bank.ltft]) : null;
-      if (s !== null) stftVals.push(s);
-      if (l !== null) ltftVals.push(l);
+      var s = stftC ? stftC[i] : NaN;
+      var l = ltftC ? ltftC[i] : NaN;
+      if (s === s) stftVals.push(s);
+      if (l === l) ltftVals.push(l);
     }
     if (!stftVals.length && !ltftVals.length) return null;
     var sStyle = detectStyle(stftVals);
     var lStyle = detectStyle(ltftVals);
-    var sum = 0, n = 0;
-    for (var j = 0; j < rows.length; j++) {
-      var sv = bank.stft ? toNum(rows[j][bank.stft]) : null;
-      var lv = bank.ltft ? toNum(rows[j][bank.ltft]) : null;
-      if (sv === null && lv === null) continue;
-      var sc = sv === null ? 128 : trimToCounts(sv, sStyle);
-      var lc = lv === null ? 128 : trimToCounts(lv, lStyle);
+    var sum = 0, cnt = 0;
+    for (var j = 0; j < n; j++) {
+      var sv = stftC ? stftC[j] : NaN;
+      var lv = ltftC ? ltftC[j] : NaN;
+      if (sv !== sv && lv !== lv) continue;
+      var sc = sv !== sv ? 128 : trimToCounts(sv, sStyle);
+      var lc = lv !== lv ? 128 : trimToCounts(lv, lStyle);
       sum += sc + lc - 128;
-      n++;
+      cnt++;
     }
-    return n ? round1(sum / n) : null;
+    return cnt ? round1(sum / cnt) : null;
   }
 
   function reportTrimStats(rows, mapResult) {
@@ -140,14 +132,15 @@
 
   function reportDuration(rows, mapResult) {
     try {
-      var col = colFor(mapResult, 'TIME');
+      var t = P66.asTable(rows);
+      var col = t ? P66.numView(t, colFor(mapResult, 'TIME')) : null;
       if (!col) return null;
       var min = Infinity, max = -Infinity, n = 0;
-      for (var i = 0; i < rows.length; i++) {
-        var t = toNum(rows[i][col]);
-        if (t === null) continue;
-        if (t < min) min = t;
-        if (t > max) max = t;
+      for (var i = 0; i < t.rowCount; i++) {
+        var tt = col[i];
+        if (tt !== tt) continue;
+        if (tt < min) min = tt;
+        if (tt > max) max = tt;
         n++;
       }
       if (n < 2 || !(max > min)) return null;
@@ -179,6 +172,7 @@
   function buildReportData(parsedLog, mapResult) {
     var data = {
       logName: null,
+      logSources: null, // multi-log sessions: [{ name, rows }] per merged file
       rows: 0,
       durationS: null,
       trimStats: { meanB1: null, meanB2: null },
@@ -188,16 +182,24 @@
       o2: null
     };
     try {
-      var rows = (parsedLog && parsedLog.rows) ? parsedLog.rows : [];
-      data.rows = rows.length;
-      data.coverage.sampleCount = rows.length;
-      if (parsedLog) data.logName = parsedLog.logName || parsedLog.name || null;
-      data.durationS = reportDuration(rows, mapResult);
-      data.trimStats = reportTrimStats(rows, mapResult);
-      var k = reportKnock(rows, mapResult);
+      var t = P66.asTable(parsedLog);
+      var n = t ? t.rowCount : 0;
+      data.rows = n;
+      data.coverage.sampleCount = n;
+      if (parsedLog) {
+        data.logName = parsedLog.logName || parsedLog.name || null;
+        if (parsedLog.logSources) {
+          data.logSources = parsedLog.logSources.map(function (s) {
+            return { name: s.name, rows: s.rows };
+          });
+        }
+      }
+      data.durationS = reportDuration(t, mapResult);
+      data.trimStats = reportTrimStats(t, mapResult);
+      var k = reportKnock(t, mapResult);
       data.knockCount = k.count;
       data.knockMaxKR = k.maxKR;
-      data.o2 = reportO2(rows, mapResult);
+      data.o2 = reportO2(t, mapResult);
     } catch (e) { /* partial data still returned */ }
     return data;
   }
@@ -285,7 +287,11 @@
 
   function reportSubtitle(data) {
     var bits = [];
-    if (data.logName) bits.push(data.logName);
+    if (data.logSources && data.logSources.length) {
+      bits.push(data.logSources.map(function (s) { return s.name; }).join(' + '));
+    } else if (data.logName) {
+      bits.push(data.logName);
+    }
     bits.push(data.rows.toLocaleString('en-US') + ' rows');
     bits.push(fmtDuration(data.durationS));
     return bits.join('  ·  ');
@@ -420,5 +426,4 @@
   P66.reportTrimVerdict = reportTrimVerdict;
   P66.renderReportCard = renderReportCard;
   P66.downloadReportPng = downloadReportPng;
-  P66.reportLines = reportLines; // shared by DOM + canvas renderers
 })(typeof window !== 'undefined' ? window : global);

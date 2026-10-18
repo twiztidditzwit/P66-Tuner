@@ -316,8 +316,8 @@
     var maxPoints = opts.maxPoints || SC_DEFAULT_MAX_POINTS;
     var laneH = opts.height || SC_DEFAULT_LANE_H;
     var mapResult = opts.mapResult || controller.mapResult || null;
-    var rows = controller.rows || [];
-    var n = rows.length;
+    var table = controller.table || null;
+    var n = table ? table.rowCount : 0;
     if (!n) {
       container.innerHTML = '<p class="muted">No log rows to chart.</p>';
       return null;
@@ -325,14 +325,16 @@
 
     // Resolve + extract + downsample each lane (pure, no DOM).
     var lanes = stripResolveLanes(channels, mapResult).map(function (rl, i) {
+      var colArr = rl.column ? table.col(rl.column) : null;
       var vals = new Array(n);
       for (var r = 0; r < n; r++) {
-        vals[r] = rl.column ? rows[r][rl.column] : NaN;
+        vals[r] = colArr ? colArr[r] : NaN;
       }
       var st = stripLaneStats(vals);
       return {
         signal: rl.signal,
         column: rl.column,
+        colArr: colArr,
         color: SC_PALETTE[i % SC_PALETTE.length],
         isTrim: stripIsTrim(rl.signal),
         decimals: scDecimals(controller, rl.signal),
@@ -452,7 +454,7 @@
       for (var i = 0; i < laneViews.length; i++) {
         var lv = laneViews[i];
         if (!lv.lane.column) { lv.valEl.textContent = 'unmapped'; continue; }
-        var raw = rows[idx][lv.lane.column];
+        var raw = lv.lane.colArr ? lv.lane.colArr[idx] : NaN;
         var v = scNum(raw);
         lv.valEl.textContent = isFinite(v) ? v.toFixed(lv.lane.decimals) : '—';
         if (lv.lane.isTrim) lv.valEl.style.color = stripTrimColor(v);

@@ -79,19 +79,19 @@
     };
   }
 
-  function num(v) {
-    return (typeof v === 'number' && isFinite(v)) ? v : null;
-  }
-
   /**
    * Baro plausibility diagnostic.
    * Compares the PCM's reported barometric pressure against the expected
    * value for the user's altitude, and checks WOT MAP against baro.
+   * rows: a log table or a legacy array of row objects.
    */
   function analyzeBaro(rows, mapResult, altitudeFt) {
-    var baroCol = P66.columnFor(mapResult, 'BARO');
+    var t = P66.asTable(rows);
+    var n = t ? t.rowCount : 0;
+    var baroName = P66.columnFor(mapResult, 'BARO');
+    var baroC = P66.numView(t, baroName);
     var expected = baroForAltitude(altitudeFt);
-    if (!baroCol) {
+    if (!baroC) {
       return {
         available: false,
         altitudeFt: altitudeFt,
@@ -101,10 +101,10 @@
       };
     }
     var vals = [];
-    rows.forEach(function (row) {
-      var v = num(row[baroCol]);
-      if (v !== null && v > 20 && v < 120) vals.push(v); // sanity window for kPa
-    });
+    for (var i = 0; i < n; i++) {
+      var v = baroC[i];
+      if (v === v && v > 20 && v < 120) vals.push(v); // sanity window for kPa
+    }
     if (vals.length < 10) {
       return {
         available: false,
@@ -142,18 +142,18 @@
 
     // WOT MAP vs baro: physically, MAP cannot exceed baro on an NA engine.
     var wotFlag = null;
-    var mapCol = P66.columnFor(mapResult, 'MAP');
-    var tpsCol = P66.columnFor(mapResult, 'TPS');
-    if (mapCol && tpsCol) {
+    var mapC = P66.numView(t, P66.columnFor(mapResult, 'MAP'));
+    var tpsC = P66.numView(t, P66.columnFor(mapResult, 'TPS'));
+    if (mapC && tpsC) {
       var wotPeak = -Infinity, wotN = 0;
-      rows.forEach(function (row) {
-        var tps = num(row[tpsCol]);
-        var map = num(row[mapCol]);
-        if (tps !== null && tps >= 78 && map !== null) {
+      for (var wi = 0; wi < n; wi++) {
+        var tps = tpsC[wi];
+        var map = mapC[wi];
+        if (tps === tps && tps >= 78 && map === map) {
           wotN++;
           if (map > wotPeak) wotPeak = map;
         }
-      });
+      }
       if (wotN >= 10 && wotPeak > median + 5) {
         wotFlag = 'WOT MAP peaked at ' + round1(wotPeak) + ' kPa — above the PCM\'s own baro reading (' +
           round1(median) + ' kPa). That is physically impossible on a naturally aspirated engine: ' +

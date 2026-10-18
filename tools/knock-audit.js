@@ -29,14 +29,15 @@ function main() {
 
   // --- 1. Are the logged KR values raw ALDL counts or already degrees? ---
   var vals = [];
-  parsed.rows.forEach(function (row) {
-    var v = row[krCol];
-    if (typeof v === 'number' && isFinite(v) && v > 0) vals.push(v);
-  });
+  var krC = P66.numView(parsed, krCol);
+  for (var vi = 0; vi < parsed.rowCount; vi++) {
+    var v = krC ? krC[vi] : NaN;
+    if (v === v && v > 0) vals.push(v);
+  }
   var distinct = {};
   vals.forEach(function (v) { distinct[v] = (distinct[v] || 0) + 1; });
   var keys = Object.keys(distinct).map(Number).sort(function (a, b) { return a - b; });
-  console.log('\n[1] nonzero KR samples: ' + vals.length + ' / ' + parsed.rows.length);
+  console.log('\n[1] nonzero KR samples: ' + vals.length + ' / ' + parsed.rowCount);
   console.log('distinct KR values (' + keys.length + '): ' + keys.join(', '));
   var allInt = keys.every(function (v) { return v === Math.round(v); });
   console.log('all-integer values (raw ALDL counts?): ' + allInt);
@@ -62,12 +63,12 @@ function main() {
   });
 
   // --- 3. Knock Counter behavior around each event (corroboration) ---
-  var kcCol = 'Knock Counter'; // rows are objects keyed by header name
+  var kcCol = 'Knock Counter';
   console.log('\n[3] Knock Counter around events (counts should rise on genuine knock):');
   report.knock.events.forEach(function (e, i) {
-    var before = parsed.rows[Math.max(0, e.startIdx - 2)][kcCol];
-    var during = parsed.rows[e.startIdx][kcCol];
-    var after = parsed.rows[Math.min(parsed.rows.length - 1, e.startIdx + e.samples + 1)][kcCol];
+    var before = parsed.num(kcCol, Math.max(0, e.startIdx - 2));
+    var during = parsed.num(kcCol, e.startIdx);
+    var after = parsed.num(kcCol, Math.min(parsed.rowCount - 1, e.startIdx + e.samples + 1));
     console.log('  event' + i + ': KC before=' + before + ' at-start=' + during +
       ' after=' + after);
   });

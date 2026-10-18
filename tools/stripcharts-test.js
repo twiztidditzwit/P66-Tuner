@@ -123,8 +123,8 @@ var logPath = path.join(process.env.HOME, 'workspace/user/files/yesss.csv');
 var parsed = P66.parseLogText(fs.readFileSync(logPath, 'utf8'));
 var mapResult = P66.mapChannels(parsed.headers);
 var ctl = P66.createPlaybackController(parsed, mapResult);
-check('controller created for real log', !!ctl && ctl.rows.length > 10000,
-  ctl ? String(ctl.rows.length) : 'null');
+check('controller created for real log', !!ctl && ctl.table.rowCount > 10000,
+  ctl ? String(ctl.table.rowCount) : 'null');
 var lanes = P66.stripResolveLanes(P66.SC_DEFAULT_CHANNELS, mapResult);
 check('all 6 default channels resolve on real log',
   lanes.every(function (l) { return !!l.column; }),
@@ -135,7 +135,7 @@ check('O2_B1 resolves', /o2/i.test(lanes[3].column), lanes[3].column);
 
 // Downsample a real lane end-to-end.
 var rpmCol = lanes[0].column;
-var rpmVals = ctl.rows.map(function (r) { return r[rpmCol]; });
+var rpmVals = Array.from(parsed.col(rpmCol));
 var dsR = P66.stripDownsample(rpmVals, 2000);
 check('real RPM lane downsamples under cap', dsR.length <= 2000 && dsR.length > 100,
   String(dsR.length));
@@ -148,7 +148,7 @@ check('real lane max RPM survives downsample',
   dsR.some(function (p) { return p.i === maxI; }),
   'max ' + maxV + ' at row ' + maxI);
 var krCol = lanes[5].column;
-var krVals = ctl.rows.map(function (r) { return r[krCol]; });
+var krVals = Array.from(parsed.col(krCol));
 var krStats = P66.stripLaneStats(krVals);
 check('real KR lane stats finite', krStats && isFinite(krStats.min) && isFinite(krStats.max) && krStats.max >= krStats.min,
   JSON.stringify(krStats));

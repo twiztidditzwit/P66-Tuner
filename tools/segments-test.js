@@ -156,7 +156,7 @@ var logPath = path.join(process.env.HOME, 'workspace/user/files/yesss.csv');
 var parsed = P66.parseLogText(fs.readFileSync(logPath, 'utf8'));
 check('real log parses 10576 rows', parsed.rowCount === 10576, String(parsed.rowCount));
 var realMap = P66.mapChannels(parsed.headers);
-var real = P66.analyzeSegments(parsed.rows, realMap);
+var real = P66.analyzeSegments(parsed, realMap);
 var realByKey = {};
 real.forEach(function (s) { realByKey[s.key] = s; });
 var shareSum = real.reduce(function (a, s) { return a + s.share; }, 0);

@@ -9,8 +9,14 @@
  * (dist/ is a local build artifact — never commit it.)
  *
  * After building, the zip is extracted to a temp dir and every
- * <script src="..."> referenced by index.html is asserted to exist inside it.
- * Exit code is nonzero on any verification failure.
+ * <script src="..."> referenced by index.html is asserted to exist inside it,
+ * PLUS every loadScriptOnce('...') lazy target found in the shipped scripts
+ * (js/ve3d.js, js/report.js, js/compare.js have no <script> tag but must
+ * still ship). Exit code is nonzero on any verification failure.
+ *
+ * All .js entries are minified at package time (tools/minify.js —
+ * conservative comment/whitespace stripping only) and every minified file
+ * must pass `node --check`; original vs minified byte totals print below.
  *
  * NOTE: a concurrent workstream may add js/provenance.js plus its <script> tag.
  * If verification finds a referenced script missing from the *repo* as well as
@@ -27,6 +33,40 @@ var path = require('path');
 var os = require('os');
 var zlib = require('zlib');
 var childProcess = require('child_process');
+var minify = require('./minify.js').minifyString;
+
+// ------------------------------------------------------------------- minify
+// The zip ships minified JS (tools/minify.js: conservative whitespace +
+// comment stripping only — no renaming, no ASI changes). Every minified
+// file must pass `node --check`; a failure aborts the build loudly rather
+// than shipping broken JS. Original vs minified byte totals print below.
+var minTotals = { original: 0, minified: 0 };
+
+function minifyEntry(name, data) {
+  if (!/\.js$/.test(name)) return data;
+  var src = data.toString('utf8');
+  var code;
+  try {
+    code = minify(src).code;
+  } catch (e) {
+    console.error('MINIFY FAILED for ' + name + ': ' + (e && e.message ? e.message : e));
+    process.exit(1);
+  }
+  minTotals.original += src.length;
+  minTotals.minified += code.length;
+  var tmp = path.join(os.tmpdir(), 'p66-min-check-' + process.pid + '.js');
+  fs.writeFileSync(tmp, code);
+  try {
+    childProcess.execFileSync(process.execPath, ['--check', tmp], { stdio: 'pipe' });
+  } catch (e) {
+    console.error('MINIFIED OUTPUT FAILED node --check for ' + name);
+    console.error((e.stderr || e.stdout || '').toString().slice(0, 500));
+    try { fs.unlinkSync(tmp); } catch (ignored) { /* ignore */ }
+    process.exit(1);
+  }
+  try { fs.unlinkSync(tmp); } catch (ignored) { /* ignore */ }
+  return Buffer.from(code, 'utf8');
+}
 
 var ROOT = path.resolve(path.join(__dirname, '..'));
 var DIST = path.join(ROOT, 'dist');
@@ -235,6 +275,15 @@ function verifyZip(zipPath, htmlText) {
         }
       }
     });
+    // Lazy-loaded modules have no <script> tag (they are fetched on demand
+    // via P66.loadScriptOnce) but MUST still ship in the zip. Scan every
+    // shipped script for loadScriptOnce('...') literals and assert each
+    // target resolves inside the zip.
+    lazySrcs().forEach(function (s) {
+      if (!fs.existsSync(path.join(tmp, s))) {
+        failures.push(s + ' — lazy-loaded by loadScriptOnce but MISSING from zip');
+      }
+    });
     // The zip must also contain its top-level payload files.
     ['index.html', 'app.js', 'styles.css', 'README-QUICKSTART.txt'].forEach(function (f) {
       if (!fs.existsSync(path.join(tmp, f))) failures.push(f + ' — missing from zip');
@@ -254,12 +303,34 @@ function verifyZip(zipPath, htmlText) {
 }
 
 // ------------------------------------------------------------------- main
+// Every loadScriptOnce('...') literal in the shipped scripts: the
+// lazy-loaded modules (js/ve3d.js, js/report.js, js/compare.js) that the
+// verifier must find in the zip even though index.html has no <script>
+// tag for them.
+function lazySrcs() {
+  var found = {};
+  var files = ['app.js'];
+  walkJs(path.join(ROOT, 'js'), 'js').forEach(function (f) { files.push(f); });
+  files.forEach(function (f) {
+    var text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    var re = /loadScriptOnce\(\s*["']([^"']+)["']\s*\)/g;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+      var s = m[1].split('#')[0].split('?')[0].replace(/^\.\//, '');
+      if (s && !/^(data:|https?:)?\/\//i.test(s) && !/^[a-z][a-z0-9+.-]*:/i.test(s)) {
+        found[s] = true;
+      }
+    }
+  });
+  return Object.keys(found).sort();
+}
+
 function main() {
   fs.mkdirSync(DIST, { recursive: true });
   var files = collectFiles();
   var htmlText = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   var entries = files.map(function (f) {
-    return { name: f, data: fs.readFileSync(path.join(ROOT, f)) };
+    return { name: f, data: minifyEntry(f, fs.readFileSync(path.join(ROOT, f))) };
   });
   entries.push({ name: 'README-QUICKSTART.txt', data: Buffer.from(quickstartText(), 'utf8') });
 
@@ -267,6 +338,10 @@ function main() {
   fs.writeFileSync(zipPath, buildZip(entries));
   var size = fs.statSync(zipPath).size;
   console.log('built ' + path.relative(ROOT, zipPath) + ' (' + entries.length + ' files, ' + size + ' bytes)');
+  var pct = minTotals.original > 0
+    ? (100 * (1 - minTotals.minified / minTotals.original)).toFixed(1) : '0.0';
+  console.log('js minified: ' + minTotals.original + ' -> ' + minTotals.minified +
+    ' bytes (' + pct + '% smaller); every file passed node --check');
   entries.forEach(function (e) { console.log('  + ' + e.name); });
 
   var v = verifyZip(zipPath, htmlText);
@@ -280,7 +355,8 @@ function main() {
     v.failures.forEach(function (f) { console.error('  FAIL ' + f); });
     process.exit(1);
   }
-  console.log('verification: OK — all ' + scriptSrcs(htmlText).length + ' <script src> targets present in zip');
+  console.log('verification: OK — all ' + scriptSrcs(htmlText).length + ' <script src> targets' +
+    ' + ' + lazySrcs().length + ' lazy loadScriptOnce() targets present in zip');
 }
 
 main();
