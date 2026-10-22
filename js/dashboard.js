@@ -615,7 +615,18 @@
     }, onFail);
   }
 
-  function renderVeComparison(container, catalog, binBytes, patches) {
+  function renderVeComparison(container, catalog, binBytes, patches, opts) {
+    opts = opts || {};
+    // Session report (optional): powers measured-vs-interpolated cell
+    // provenance. Without it the grids render exactly as before.
+    var provReport = opts.report || null;
+    function provenanceFor(tableName) {
+      try {
+        if (!provReport || typeof P66.veCellProvenance !== 'function') return null;
+        var prov = P66.veCellProvenance(provReport, tableName);
+        return (prov && prov.available) ? prov : null;
+      } catch (e) { return null; }
+    }
     // Stop any previous 3D loop: the old canvas is detached after clear().
     if (container._veStop) {
       try { container._veStop(); } catch (e) { /* ignore */ }
@@ -642,11 +653,16 @@
 
     var currentTable = tableNames[0];
     var currentView = 'change';
-    var data = null, vmin = 0, vmax = 1;
+    var data = null, vmin = 0, vmax = 1, currentProv = null;
 
     var wrap = document.createElement('div');
     var summary = document.createElement('p');
     wrap.appendChild(summary);
+    // Provenance legend (only when a session report is attached).
+    var provLegend = document.createElement('div');
+    provLegend.className = 've-prov-legend muted';
+    provLegend.style.margin = '0.25rem 0 0.5rem';
+    wrap.appendChild(provLegend);
 
     if (tableNames.length > 1) {
       var tableToggle = document.createElement('p');
@@ -721,6 +737,12 @@
         gridBox.innerHTML = '';
         return;
       }
+      // Cell provenance for this table (measured vs interpolated).
+      currentProv = provenanceFor(t);
+      try {
+        provLegend.innerHTML = (currentProv && typeof P66.veProvenanceLegendHTML === 'function')
+          ? P66.veProvenanceLegendHTML() : '';
+      } catch (e) { provLegend.innerHTML = ''; }
       vmin = Infinity; vmax = -Infinity;
       data.before.forEach(function (row) {
         row.forEach(function (v) {
@@ -795,6 +817,17 @@
           var td = document.createElement('td');
           var d = data.deltas[r][c];
           td.title = cellTip(r, c);
+          // Provenance: mark interpolated cells with a hatch class and extend
+          // the tooltip. Never touches the fuel blue/red semantics.
+          try {
+            var provCell = currentProv && currentProv.cells[r] && currentProv.cells[r][c];
+            if (provCell && typeof P66.veProvenanceClass === 'function' &&
+                typeof P66.veProvenanceTip === 'function') {
+              var pcls = P66.veProvenanceClass(provCell);
+              if (pcls) td.className = (td.className ? td.className + ' ' : '') + pcls;
+              td.title += ' — ' + P66.veProvenanceTip(provCell);
+            }
+          } catch (perr) { /* provenance is decorative */ }
           if (view === 'change') {
             if (d) {
               td.textContent = (d.deltaPct > 0 ? '+' : '') + d.deltaPct + '%';
@@ -883,6 +916,9 @@
       hint.textContent = 'Drag to rotate · scroll to zoom · slowly auto-rotates when idle';
       gridBox.appendChild(hint);
       try {
+        // Attach cell provenance so the 3D surface desaturates interpolated
+        // (unmeasured) regions. currentProv tracks the active table.
+        try { data.provenance = currentProv; } catch (e2) { /* noop */ }
         container._veStop = P66.renderVeSurface(canvas, data, function () { return dataset; }, {
           getShowPoints: function () { return showPoints; },
           getPoints: function () { return ptsInfo ? ptsInfo.points : []; }
@@ -1446,7 +1482,18 @@
 
   /* ---------- entry point ---------- */
 
+  // Latest render args, stashed so the newer analysis sections (which need
+  // the raw log, the channel map, and session metadata) can reach them
+  // without changing every existing section's signature.
+  var _lastParsedLog = null, _lastMapResult = null, _lastSessionMeta = null;
+  function parsedLogRef() { return _lastParsedLog; }
+  function mapResultRef() { return _lastMapResult; }
+  function sessionMetaRef() { return _lastSessionMeta; }
+
   function renderDashboard(parts, report, parsedLog, mapResult, history, sessionMeta) {
+    _lastParsedLog = parsedLog;
+    _lastMapResult = mapResult;
+    _lastSessionMeta = sessionMeta || null;
     if (parts.heatmap) renderHeatmap(parts.heatmap, report.fuelTrims);
     // Trim heatmap (item 10): BLM/INT per VE-grid cell next to the trim grid.
     // Toggle re-renders the same heatmap object — no recompute.
@@ -1483,6 +1530,105 @@
     if (parts.lambda) renderLambdaTrace(parts.lambda, parsedLog, mapResult);
     if (parts.comparison) renderComparison(parts.comparison, history || []);
     renderSparkPanel(report);
+    // New analyses (9-feature build): each guarded so a missing module or
+    // missing channel degrades to a quiet note instead of breaking the dash.
+    renderIdcSection(parts);
+    renderIdleDiagSection(parts);
+    renderWarmupSection(parts);
+    renderPeVerifySection(parts);
+    renderConvergenceSection(parts, report);
+  }
+
+  // "Did my last patches work?" — History tab. Compares the before-flash
+  // trim snapshot (persisted when the patched binary was built) against the
+  // current session's trims, per table region.
+  function renderConvergenceSection(parts, report) {
+    if (!parts.convergence || typeof P66.checkConvergence !== 'function' ||
+        typeof P66.renderConvergenceHTML !== 'function') return;
+    try {
+      var meta = sessionMetaRef() || {};
+      var getPs = meta.getStoredPatchSet;
+      var wrap = document.createElement('div');
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.style.width = 'auto';
+      btn.style.padding = '0.55rem 1.2rem';
+      btn.textContent = 'Check if my last patches worked';
+      var out = document.createElement('div');
+      out.style.marginTop = '0.75rem';
+      wrap.appendChild(btn);
+      wrap.appendChild(out);
+      parts.convergence.innerHTML = '';
+      parts.convergence.appendChild(wrap);
+      btn.addEventListener('click', function () {
+        try {
+          var ps = (typeof getPs === 'function') ? getPs() : null;
+          if (!ps || !ps.patches || !ps.patches.length) {
+            out.innerHTML = '<p class="muted">No recorded patch set yet — generate a tune and build the ' +
+              'patched binary first. The check compares that session against this one.</p>';
+            return;
+          }
+          if (!ps.beforeFuelTrims) {
+            out.innerHTML = '<p class="muted">The recorded patch set has no before-flash trim snapshot.</p>';
+            return;
+          }
+          var res = P66.checkConvergence(
+            { fuelTrims: ps.beforeFuelTrims }, report,
+            { id: ps.id, appliedAt: ps.appliedAt, patches: ps.patches });
+          out.innerHTML = P66.renderConvergenceHTML(res);
+        } catch (e) {
+          out.innerHTML = '<p class="muted">Convergence check unavailable: ' +
+            ((e && e.message) || e) + '</p>';
+        }
+      });
+    } catch (e) { sectionNote(parts.convergence, 'Convergence check unavailable.'); }
+  }
+
+  function sectionNote(container, text) {
+    try { container.innerHTML = '<p class="muted">' + text + '</p>'; } catch (e) { /* noop */ }
+  }
+
+  // Injector duty headroom — Fuel tab. Reads the log table directly.
+  function renderIdcSection(parts) {
+    if (!parts.idc || typeof P66.analyzeIdcHeadroom !== 'function' ||
+        typeof P66.renderIdcHTML !== 'function') return;
+    try {
+      var res = P66.analyzeIdcHeadroom(parsedLogRef(), mapResultRef());
+      parts.idc.innerHTML = P66.renderIdcHTML(res);
+    } catch (e) { sectionNote(parts.idc, 'Injector duty check unavailable.'); }
+  }
+
+  // IAC / idle stability — Sensors tab.
+  function renderIdleDiagSection(parts) {
+    if (!parts.idleDiag || typeof P66.analyzeIdle !== 'function' ||
+        typeof P66.renderIdleDiagHTML !== 'function') return;
+    try {
+      var res = P66.analyzeIdle(parsedLogRef(), mapResultRef());
+      parts.idleDiag.innerHTML = P66.renderIdleDiagHTML(res);
+    } catch (e) { sectionNote(parts.idleDiag, 'Idle diagnostics unavailable.'); }
+  }
+
+  // Cold-start / warmup — Sensors tab. The warmup pass runs in app.js and
+  // arrives via sessionMeta.warmup.
+  function renderWarmupSection(parts) {
+    if (!parts.warmup || typeof P66.renderWarmupHTML !== 'function') return;
+    try {
+      var w = sessionMetaRef() && sessionMetaRef().warmup;
+      if (!w) { sectionNote(parts.warmup, 'No warmup analysis for this session.'); return; }
+      parts.warmup.innerHTML = P66.renderWarmupHTML(w);
+    } catch (e) { sectionNote(parts.warmup, 'Warmup analysis unavailable.'); }
+  }
+
+  // PE commanded-vs-actual — Fuel tab. Needs the analyzed bin + catalog.
+  function renderPeVerifySection(parts) {
+    if (!parts.peVerify || typeof P66.verifyPeCommanded !== 'function' ||
+        typeof P66.renderPeVerifyHTML !== 'function') return;
+    try {
+      var meta = sessionMetaRef() || {};
+      var res = P66.verifyPeCommanded(
+        { rows: parsedLogRef(), mapResult: mapResultRef() }, meta.catalog, meta.binBytes);
+      parts.peVerify.innerHTML = P66.renderPeVerifyHTML(res);
+    } catch (e) { sectionNote(parts.peVerify, 'PE verification unavailable.'); }
   }
 
   // Exposed for testing
