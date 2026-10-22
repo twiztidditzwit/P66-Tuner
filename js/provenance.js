@@ -123,7 +123,10 @@
    * sourceBytes  Uint8Array — the original binary
    * patchedBytes Uint8Array — the binary offered for download
    * patches      array of { address, addressHex, sizeBytes, table, ... }
-   * meta         { app, catalog, generatedAt } (all optional)
+   * meta         { app, catalog, generatedAt, sourceBinName, sourceBinLabel }
+   *              (all optional). sourceBinName / sourceBinLabel name the bin
+   *              that was analyzed and patched — the downloaded binary's
+   *              provenance record must identify its source bin.
    */
   function buildProvenance(sourceBytes, patchedBytes, patches, meta) {
     meta = meta || {};
@@ -132,6 +135,8 @@
       sourceSha256: null,
       patchedSha256: null,
       sourceLength: 0,
+      sourceBinName: meta.sourceBinName || null,
+      sourceBinLabel: meta.sourceBinLabel || null,
       changedByteCount: 0,
       changeReport: '',
       uncovered: [], // [{ start, end, startHex, endHex, count }]
@@ -217,6 +222,12 @@
     var lines = [];
     lines.push('P66-Tuner change report — ' + (meta.app || 'p66-tuner'));
     lines.push('Generated (UTC): ' + (meta.generatedAt || new Date().toISOString()));
+    // Name the source bin: the change report must say which binary the
+    // patches were built from (the analyzed bin — the one in the PCM at
+    // log time). The SHA-256 below identifies the bytes; the name says
+    // which file the user loaded them from.
+    lines.push('Source binary: ' + (meta.sourceBinName || '(file name not recorded)') +
+      (meta.sourceBinLabel ? ' — ' + meta.sourceBinLabel : ''));
     lines.push('Source SHA-256:  ' + result.sourceSha256 + ' (' + result.sourceLength + ' bytes)');
     lines.push('Patched SHA-256: ' + result.patchedSha256 + ' (' + result.sourceLength + ' bytes)');
     lines.push('Changed bytes: ' + result.changedByteCount);
