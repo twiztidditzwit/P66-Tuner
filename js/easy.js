@@ -272,7 +272,9 @@
       try {
         prov = (typeof P66.buildProvenance === 'function')
           ? P66.buildProvenance(binBytes, finalImage, allPatches,
-              { app: 'p66-tuner (easy wizard)', catalog: catalog })
+              { app: 'p66-tuner (easy wizard)', catalog: catalog,
+                sourceBinName: (state.bin && state.bin.name) || null,
+                sourceBinLabel: 'easy-wizard bin (in the PCM when the log was recorded)' })
           : { ok: false, sourceSha256: null, patchedSha256: null, changedByteCount: 0,
               changeReport: '', uncovered: [],
               message: 'Provenance module not loaded (js/provenance.js).' };
