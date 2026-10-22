@@ -8,6 +8,7 @@
     xdf: document.getElementById('xdf-input'),
     ads: document.getElementById('ads-input'),
     bin: document.getElementById('bin-input'),
+    binStock: document.getElementById('bin-stock-input'),
     log: document.getElementById('log-input'),
   };
 
@@ -45,9 +46,14 @@
   }
   var dashParts = {
     heatmap: document.getElementById('heatmap'),
+    idc: document.getElementById('idc-headroom'),
+    peVerify: document.getElementById('pe-verify'),
     coverage: document.getElementById('coverage'),
     journal: document.getElementById('journal'),
+    convergence: document.getElementById('convergence'),
     regions: document.getElementById('region-chart'),
+    idleDiag: document.getElementById('idle-diag'),
+    warmup: document.getElementById('warmup-report'),
     knock: document.getElementById('knock-chart'),
     lambda: document.getElementById('lambda-chart'),
     trans: document.getElementById('trans-report'),
@@ -487,7 +493,7 @@
   };
 
   // Session state
-  var files = { xdf: null, ads: null, bin: null, log: null };
+  var files = { xdf: null, ads: null, bin: null, binStock: null, log: null };
   var parsedLog = null;
   var mapResult = null;
   var playbackCtl = null;
@@ -763,6 +769,47 @@
   }
   var binBytes = null;
   var lastPatches = null;
+  // The session report that generated the tune currently being patched.
+  // A new analysis between "tune" and "patch" must not silently reassign it.
+  var lastTuneReport = null;
+
+  // Patch-set persistence for the convergence check ("did my last patches
+  // work?"). Stored in localStorage so it survives the flash → log → analyze
+  // loop across days. Best-effort: never break patching.
+  var PATCHSET_KEY = 'p66-last-patchset-v1';
+  function storePatchSet(ps) {
+    try {
+      localStorage.setItem(PATCHSET_KEY, JSON.stringify(ps));
+      return true;
+    } catch (e) { return false; }
+  }
+  function readStoredPatchSet() {
+    try {
+      var raw = localStorage.getItem(PATCHSET_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  // Two-bin model (js/twobin.js): binBytes is the REQUIRED analyzed bin —
+  // the one that was in the PCM when the log was recorded. stockBinBytes is
+  // the OPTIONAL stock/reference bin (drift view + restore baseline).
+  var stockBinBytes = null;
+  var stockBinName = null;
+  var isStockFirstTune = false;
+  var stockBinStore = (typeof P66.createTwoBinStore === 'function') ? P66.createTwoBinStore() : null;
+
+  // Same-file check across the two slots. Byte-identical bins in both slots
+  // mean the PCM is still stock and this is its first tune — the flag is
+  // surfaced in the console, the file summary, and the tune audit trail.
+  function updateTwoBinState() {
+    isStockFirstTune = !!(binBytes && stockBinBytes &&
+      typeof P66.binsIdentical === 'function' && P66.binsIdentical(binBytes, stockBinBytes));
+    if (isStockFirstTune) {
+      writeConsole((typeof P66.stockFirstTuneMessage === 'function')
+        ? P66.stockFirstTuneMessage()
+        : 'Same bin in both slots — treating this as a stock PCM\'s first tune.');
+    }
+    return isStockFirstTune;
+  }
 
   function resetDashboardPlaceholders() {
     var msgs = {
@@ -791,16 +838,38 @@
   }
 
   function refreshSummary() {
+    // The stock bin can outlive its File object (restored from local
+    // storage on reload), so the summary reads the name/bytes directly.
+    var stockLabel = stockBinName
+      ? esc(stockBinName) + (stockBinBytes ? ' (' + Math.round(stockBinBytes.length / 1024) + ' KB)' : '')
+      : 'not loaded (optional)';
     fileSummary.innerHTML =
       '<ul>' +
       '<li><strong>XDF:</strong> ' + (xdfSourceLabel ? esc(xdfSourceLabel) : fileLabel(files.xdf)) +
       (xdfCatalog ? ' — ' + xdfCatalog.tables.length + ' tables parsed' : '') + '</li>' +
       '<li><strong>ADS:</strong> ' + fileLabel(files.ads) + '</li>' +
-      '<li><strong>BIN:</strong> ' + fileLabel(files.bin) +
+      '<li><strong>BIN (in PCM at log time):</strong> ' + fileLabel(files.bin) +
       (binBytes ? ' — ' + binBytes.length + ' bytes' : '') + '</li>' +
+      '<li><strong>Stock / reference BIN:</strong> ' + stockLabel +
+      (isStockFirstTune ? ' — <span class="status-ok">same as analyzed bin: stock PCM\'s first tune</span>' : '') +
+      (stockBinBytes ? ' <button id="stock-bin-dl" style="width:auto;padding:0.25rem 0.8rem;margin-left:0.5rem;">Download reference bin</button>' : '') + '</li>' +
       '<li><strong>LOG:</strong> ' + sessionLogLabel() +
       (parsedLog ? ' — ' + parsedLog.rowCount.toLocaleString('en-US') + ' rows parsed' : '') + '</li>' +
       '</ul>';
+    // Restore-baseline escape hatch: grab the reference bin back as a file.
+    var dlStock = document.getElementById('stock-bin-dl');
+    if (dlStock && stockBinBytes) {
+      dlStock.addEventListener('click', function () {
+        var blob = new Blob([stockBinBytes], { type: 'application/octet-stream' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = stockBinName || 'stock-reference.bin';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+        writeConsole('Reference bin downloaded: ' + (stockBinName || 'stock-reference.bin') + ' — keep this safe, it is your restore baseline.');
+      });
+    }
   }
 
   function esc(s) {
@@ -1039,21 +1108,44 @@
         readBinaryFile(files.bin).then(function (bytes) {
           binBytes = bytes;
           lastPatches = null;
+          updateTwoBinState();
           refreshSummary();
-          writeConsole('BIN loaded: ' + bytes.length + ' bytes.');
+          writeConsole('BIN loaded: ' + bytes.length + ' bytes — this is the bin the tune will be built from (the one in the PCM at log time).');
         }).catch(function (err) {
           writeConsole('Failed to read BIN file: ' + err);
+        });
+      } else if (key === 'binStock' && files.binStock) {
+        readBinaryFile(files.binStock).then(function (bytes) {
+          stockBinBytes = bytes;
+          stockBinName = files.binStock.name;
+          lastPatches = null;
+          // Sticky across sessions: remember the reference bin locally.
+          if (stockBinStore) {
+            var saved = stockBinStore.set(stockBinName, stockBinBytes);
+            writeConsole(saved.stored
+              ? 'Stock/reference bin saved for next session: ' + stockBinName + '.'
+              : 'Stock/reference bin kept for this session only (' + saved.message + ').');
+          }
+          updateTwoBinState();
+          refreshSummary();
+          writeConsole('Stock/reference BIN loaded: ' + bytes.length + ' bytes.');
+        }).catch(function (err) {
+          writeConsole('Failed to read stock/reference BIN file: ' + err);
         });
       } else {
         // (Log clearing goes through removeSessionLog / rebuildLogSession.)
         if (key === 'xdf') { xdfCatalog = null; xdfSourceLabel = null; pendingXdf = null;
           var xSaveBtn = document.getElementById('xdf-save-btn');
           if (xSaveBtn) xSaveBtn.disabled = true; }
-        if (key === 'bin') { binBytes = null; lastPatches = null; }
+        if (key === 'bin') { binBytes = null; lastPatches = null; isStockFirstTune = false; }
+        if (key === 'binStock') {
+          stockBinBytes = null; stockBinName = null; isStockFirstTune = false;
+          if (stockBinStore) stockBinStore.clear();
+        }
         refreshSummary();
         renderMappingPreview();
       }
-      if (files[key]) writeConsole(key.toUpperCase() + ' file loaded: ' + files[key].name);
+      if (files[key]) writeConsole((key === 'binStock' ? 'STOCK/REFERENCE BIN' : key.toUpperCase()) + ' file loaded: ' + files[key].name);
     });
   });
 
@@ -1255,10 +1347,57 @@
     analysisResults.innerHTML = html;
   }
 
+  // Log-health gate state. The override is tied to the exact parsed log object,
+  // so loading a different log automatically re-arms the gate.
+  var healthOverrideLog = null;
+  var sessionHealth = null;
+
+  function renderLogHealthNote(health) {
+    // Small non-blocking note; the full per-issue list lives in the dashboard.
+    if (!health || !health.issues || !health.issues.length) return;
+    var warns = health.issues.filter(function (i) { return i.severity !== 'info'; }).length;
+    if (warns) writeConsole('Log health: ' + health.score + '/100 — ' + warns + ' warning(s). Analysis proceeding.');
+  }
+
+  function renderLogHealthBlock(health, gate) {
+    var el = document.getElementById('analysis-results');
+    if (!el) return;
+    var html = '<h3>Log health check failed (' + health.score + '/100)</h3>' +
+      '<p>' + esc(gate.message) + '</p><ul>';
+    health.issues.forEach(function (iss) {
+      html += '<li><strong>[' + esc(iss.severity) + ']</strong> ' + esc(iss.message) + '</li>';
+    });
+    html += '</ul><p><button id="health-override-btn" style="width:auto;padding:0.55rem 1.2rem;">' +
+      'Analyze anyway</button> <span class="muted">Only do this if you know the log is usable.</span></p>';
+    el.innerHTML = html;
+    document.getElementById('health-override-btn').addEventListener('click', function () {
+      healthOverrideLog = parsedLog; // override applies to this log only
+      writeConsole('Log-health override accepted for this log — analyzing anyway.');
+      document.getElementById('analyze-btn').click();
+    });
+  }
+
   document.getElementById('analyze-btn').addEventListener('click', function () {
     if (!parsedLog || !mapResult) {
       writeConsole('Analyze blocked: load a log file first.');
       return;
+    }
+    // Log-health gate: garbage logs get blocked with an explicit override.
+    // The override is tied to the exact log object so loading a new log re-arms the gate.
+    if (typeof P66.logHealth === 'function' && typeof P66.logHealthGate === 'function') {
+      if (healthOverrideLog !== parsedLog) {
+        var health = P66.logHealth(parsedLog, mapResult);
+        var gate = P66.logHealthGate(health);
+        sessionHealth = health;
+        if (!gate.ok && gate.overrideRequired) {
+          renderLogHealthBlock(health, gate);
+          writeConsole('Analysis blocked: log health score ' + health.score + '/100 — ' +
+            health.issues.filter(function (i) { return i.severity === 'block'; }).length +
+            ' blocking issue(s). Review below or choose "Analyze anyway".');
+          return;
+        }
+        renderLogHealthNote(health);
+      }
     }
     var analyzeBtn = document.getElementById('analyze-btn');
     analyzeBtn.disabled = true;
@@ -1273,12 +1412,32 @@
       sessionReport = report;
       sessionHistory.push(sessionReport);
       if (sessionHistory.length > 10) sessionHistory.shift();
+      // Cold-start second pass over the warmup-gated rows (excluded from the
+      // hot analysis). Gated = not transient and not warm, same dialect as
+      // the analyzer's extractFeatures.
+      var sessionWarmup = null;
+      try {
+        if (typeof P66.analyzeWarmup === 'function' &&
+            typeof P66.extractFeatures === 'function' && parsedLog.rowCount) {
+          var feat = P66.extractFeatures(parsedLog, mapResult);
+          if (feat && feat.isWarm && feat.isTransient) {
+            var gated = [];
+            for (var gi = 0; gi < parsedLog.rowCount; gi++) {
+              if (!feat.isTransient[gi] && !feat.isWarm[gi]) gated.push(gi);
+            }
+            sessionWarmup = P66.analyzeWarmup(parsedLog, mapResult, gated);
+          }
+        }
+      } catch (werr) { /* warmup is informational; never break analysis */ }
       renderAnalysis(sessionReport);
       P66.renderDashboard(dashParts, sessionReport, parsedLog, mapResult, sessionHistory,
-        { logName: sessionLogName() });
+        { logName: sessionLogName(), catalog: xdfCatalog, binBytes: binBytes, warmup: sessionWarmup,
+          getStoredPatchSet: readStoredPatchSet });
       writeConsole('Analysis complete: ' + sessionReport.rowCount + ' rows, ' +
         Object.keys(sessionReport.regionDistribution).length + ' regions classified. ' +
-        '(session ' + sessionHistory.length + ' in history)');
+        '(session ' + sessionHistory.length + ' in history)' +
+        (sessionWarmup && sessionWarmup.available
+          ? ' Cold-start pass: ' + sessionWarmup.coldSamples + ' warmup samples analyzed.' : ''));
     }).catch(function (err) {
       analyzeBtn.disabled = false;
       hideAnalyzeProgress();
@@ -1424,7 +1583,11 @@
             try {
               provenance = (typeof P66.buildProvenance === 'function')
                 ? P66.buildProvenance(binBytes, finalImage, allPatches,
-                    { app: 'p66-tuner (advanced)', catalog: xdfCatalog })
+                    { app: 'p66-tuner (advanced)', catalog: xdfCatalog,
+                      // Provenance names the source bin: the analyzed bin —
+                      // the one that was in the PCM when the log was recorded.
+                      sourceBinName: files.bin ? files.bin.name : null,
+                      sourceBinLabel: 'analyzed bin (in the PCM when the log was recorded)' })
                 : { ok: false, sourceSha256: null, patchedSha256: null, changedByteCount: 0,
                     changeReport: '', uncovered: [],
                     message: 'Provenance module not loaded (js/provenance.js).' };
@@ -1451,6 +1614,34 @@
               }
             } else {
             lastPatches = { patches: allPatches, patched: finalImage, provenance: provenance };
+            // Convergence bookkeeping: persist the patch set with the
+            // before-flash trim snapshot, and tag the tune journal. The
+            // History tab's "did my last patches work?" check reads this.
+            try {
+              var psId = 'ps-' + Date.now().toString(36);
+              var psPatches = allPatches.map(function (p) {
+                return { kind: p.kind, table: p.table, cell: p.cell,
+                  deltaPct: p.deltaPct, deltaDeg: p.deltaDeg };
+              });
+              var psOk = storePatchSet({
+                id: psId,
+                appliedAt: new Date().toISOString(),
+                patches: psPatches,
+                beforeFuelTrims: (lastTuneReport && lastTuneReport.fuelTrims) || null,
+                sourceBin: provenance.sourceSha256 || null
+              });
+              if (psOk && typeof P66.createJournal === 'function') {
+                var kinds = {};
+                psPatches.forEach(function (p) { kinds[p.kind || 'fuel'] = true; });
+                P66.createJournal().add({
+                  note: 'Patched binary built (' + psId + '): ' + psPatches.length +
+                    ' patch(es) across ' + Object.keys(kinds).join(', ') +
+                    '. Flash it, log a drive, and run "Did my last patches work?"',
+                  logName: sessionLogName(),
+                  patchCount: psPatches.length
+                });
+              }
+            } catch (pse) { /* persistence is best-effort */ }
             // Cumulative runaway guard: warn when this patch set would push
             // any cell's multi-session total past the guardrails. Keyed by
             // source fingerprint, so a different binary starts clean.
@@ -1508,6 +1699,10 @@
             '<label>Binary B <input type="file" id="bindiff-b" accept=".bin"></label></p>' +
             '<div id="bindiff-out"><p class="muted">Pick two binaries to compare.</p></div></details>';
           html += '<p><strong>Audit trail</strong></p>';
+          if (isStockFirstTune) {
+            html += '<p class="status-ok"><strong>Stock PCM\'s first tune:</strong> the analyzed bin is byte-identical to your stock/reference bin — ' +
+              'patches were computed against a stock PCM and the reference bin remains your restore baseline.</p>';
+          }
           html += '<p><strong>Source SHA-256:</strong><br><code>' + esc(provenance.sourceSha256) + '</code></p>';
           html += '<p><strong>Patched SHA-256:</strong><br><code>' + esc(provenance.patchedSha256) + '</code></p>';
           html += '<p><strong>Changed bytes:</strong> ' + provenance.changedByteCount + '</p>';
@@ -1530,7 +1725,7 @@
       }
       } // end safety-guard else (binGuard.level !== 'block')
     } else {
-      html += '<p class="muted">Load an XDF + stock binary to get concrete binary patches.</p>';
+      html += '<p class="muted">Load an XDF + the bin that was in the PCM at log time to get concrete binary patches.</p>';
     }
 
     // Plain-English summary first: nobody should flash a binary they
@@ -1555,6 +1750,15 @@
       var out = document.getElementById('bindiff-out');
       if (!aIn || !bIn || !out || typeof P66.diffBins !== 'function' || typeof P66.renderDiffHTML !== 'function') return;
       var bufs = { a: null, b: null };
+      // Two-bin model: the stock/reference bin defaults into slot B when
+      // one is loaded — the drift view works without re-picking it.
+      var diffSlots = (typeof P66.resolveBinDiffSlots === 'function')
+        ? P66.resolveBinDiffSlots({ stockBytes: stockBinBytes, stockName: stockBinName })
+        : { a: null, b: null, bDefaulted: false, note: '' };
+      if (diffSlots.b) {
+        bufs.b = diffSlots.b;
+        out.innerHTML = '<p class="muted">' + esc(diffSlots.note) + '</p>';
+      }
       function readBin(input, key) {
         var f = input.files && input.files[0];
         if (!f) { bufs[key] = null; return Promise.resolve(); }
@@ -1580,7 +1784,8 @@
     var veCompare = document.getElementById('ve-compare');
     if (veCompare && typeof P66.renderVeComparison === 'function' && xdfCatalog && binBytes) {
       try {
-        P66.renderVeComparison(veCompare, xdfCatalog, binBytes, lastPatches ? lastPatches.patches : []);
+        P66.renderVeComparison(veCompare, xdfCatalog, binBytes, lastPatches ? lastPatches.patches : [],
+          { report: sessionReport });
       } catch (verr) {
         veCompare.innerHTML = '<p class="muted">VE table render failed: ' +
           esc(verr && verr.message ? verr.message : verr) + '</p>';
@@ -1649,6 +1854,28 @@
     var mode = modeSelect ? modeSelect.value : 'conservative';
     try {
       var result = P66.generateSuggestions(sessionReport, mode, xdfCatalog);
+      lastTuneReport = sessionReport; // the report this tune was generated from
+      // Knock-based spark learning: −1°/pass only where REAL knock repeats
+      // in the same cell across ≥2 sessions. History comes from in-memory
+      // session reports (the journal holds notes, not reports).
+      try {
+        if (typeof P66.suggestKnockSpark === 'function' && sessionHistory.length) {
+          var knockEntries = sessionHistory.map(function (r, i) {
+            return { report: r, logName: 'session ' + (i + 1) };
+          });
+          var ksOpts = { sessionId: sessionLogName(), currentLabel: 'this log' };
+          if (binBytes && typeof P66.sha256Hex === 'function') {
+            try { ksOpts.fingerprint = P66.sha256Hex(binBytes); } catch (fe) { /* no fingerprint */ }
+          }
+          var ksSug = P66.suggestKnockSpark(sessionReport, knockEntries,
+            (typeof P66.createLedger === 'function') ? P66.createLedger() : null, ksOpts);
+          if (ksSug && ksSug.length) {
+            result.actionable = result.actionable.concat(ksSug);
+            writeConsole('Knock learning: ' + ksSug.length +
+              ' spark suggestion(s) from repeating knock (merged into the tune).');
+          }
+        }
+      } catch (kerr) { /* knock learning is advisory; never break the tune */ }
       renderTune(result);
       writeConsole('Tune suggestions generated (' + mode + ' mode): ' + result.summary);
     } catch (err) {
@@ -1714,6 +1941,20 @@
       onSkip: dismiss
     });
   })();
+
+  // Restore the sticky stock/reference bin from the previous session
+  // (js/twobin.js store). The File object is gone, but the bytes are what
+  // the drift view and the restore baseline need.
+  if (stockBinStore) {
+    try {
+      var savedStock = stockBinStore.get();
+      if (savedStock && savedStock.bytes && savedStock.bytes.length) {
+        stockBinBytes = savedStock.bytes;
+        stockBinName = savedStock.name;
+        writeConsole('Stock/reference bin restored from last session: ' + savedStock.name + '.');
+      }
+    } catch (e) { /* corrupt entry — start clean */ }
+  }
 
   refreshSummary();
   renderMappingPreview();
