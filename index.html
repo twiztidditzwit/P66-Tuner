@@ -98,9 +98,15 @@
           </label>
 
           <label class="dropzone" for="bin-input">
-            <span>Stock Binary</span>
-            <small>.bin</small>
+            <span>Bin in the PCM when this log was recorded</span>
+            <small>.bin — required: the tune is built from this one</small>
             <input id="bin-input" type="file" accept=".bin" />
+          </label>
+
+          <label class="dropzone" for="bin-stock-input">
+            <span>Stock / reference bin</span>
+            <small>.bin — optional: restore baseline + drift view</small>
+            <input id="bin-stock-input" type="file" accept=".bin" />
           </label>
 
           <label class="dropzone" for="log-input">
@@ -239,6 +245,14 @@
             <h3>Fuel Trim Heatmap <span class="muted" style="font-weight:normal">— RPM × MAP, avg combined trim</span></h3>
             <div id="heatmap"><p class="muted">Run analysis to render the heatmap.</p></div>
           </div>
+          <div>
+            <h3>Injector Duty Headroom <span class="muted" style="font-weight:normal">— is the fuel system maxed out?</span></h3>
+            <div id="idc-headroom"><p class="muted">Run analysis to check injector duty.</p></div>
+          </div>
+          <div>
+            <h3>PE Commanded vs Actual <span class="muted" style="font-weight:normal">— did the PCM command what the tables say?</span></h3>
+            <div id="pe-verify"><p class="muted">Run analysis to verify PE commands.</p></div>
+          </div>
         </div>
         <div class="tab-panel" data-panel="knock" role="tabpanel">
           <p class="muted tab-desc">Knock retard events over time — real knock vs tip-out noise.</p>
@@ -256,6 +270,14 @@
           <div>
             <h3>Operating Regions</h3>
             <div id="region-chart"><p class="muted">Run analysis to render region breakdown.</p></div>
+          </div>
+          <div>
+            <h3>Idle Diagnostics <span class="muted" style="font-weight:normal">— IAC, idle stability, vacuum-leak hints</span></h3>
+            <div id="idle-diag"><p class="muted">Run analysis to diagnose idle.</p></div>
+          </div>
+          <div>
+            <h3>Cold Start / Warmup <span class="muted" style="font-weight:normal">— crank fuel and warmup enrichment</span></h3>
+            <div id="warmup-report"><p class="muted">Run analysis to check cold-start fueling.</p></div>
           </div>
         </div>
         <div class="tab-panel" data-panel="coverage" role="tabpanel">
@@ -281,6 +303,10 @@
           <div>
             <h3>Tune Journal <span class="muted" style="font-weight:normal">— what you flashed, what happened</span></h3>
             <div id="journal"><p class="muted">Run analysis to open the journal.</p></div>
+          </div>
+          <div>
+            <h3>Did My Last Patches Work? <span class="muted" style="font-weight:normal">— trim convergence check</span></h3>
+            <div id="convergence"><p class="muted">Flash a patched binary, log a new session, run analysis, then check.</p></div>
           </div>
         </div>
       </section>
@@ -312,25 +338,34 @@
     <script src="js/log-parser.js"></script>
     <script src="js/log-merge.js"></script>
     <script src="js/channel-mapper.js"></script>
+    <script src="js/log-health.js"></script>
+    <script src="js/idc-headroom.js"></script>
     <script src="js/analyzer.js"></script>
+    <script src="js/idle-diag.js"></script>
     <script src="js/ae-scatter.js"></script>
     <script src="js/shift-histograms.js"></script>
     <script src="js/analyze-async.js"></script>
     <script src="js/coverage.js"></script>
     <script src="js/tuner.js"></script>
+    <script src="js/warmup.js"></script>
+    <script src="js/ve-provenance.js"></script>
     <script src="js/mode-compare.js"></script>
     <script src="js/lazy.js"></script>
     <script src="js/dashboard.js"></script>
     <script src="js/trim-heatmap.js"></script>
     <script src="js/xdf-map.js"></script>
+    <script src="js/pe-verify.js"></script>
     <script src="js/verify.js"></script>
     <script src="js/provenance.js"></script>
+    <script src="js/twobin.js"></script>
     <script src="js/fingerprints.js"></script>
     <script src="js/safety.js"></script>
     <script src="js/summary.js"></script>
     <script src="js/ledger.js"></script>
     <script src="js/patch-preview.js"></script>
     <script src="js/journal.js"></script>
+    <script src="js/knock-spark.js"></script>
+    <script src="js/convergence.js"></script>
     <script src="js/altitude.js"></script>
     <script src="js/playback.js"></script>
     <script src="js/engine-sound.js"></script>

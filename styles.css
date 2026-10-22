@@ -920,3 +920,17 @@ footer.container {
   background: #0d1420; border: 1px solid #2a3648; border-radius: 12px;
   padding: 1.5rem 1.6rem; max-width: 600px; width: 100%;
 }
+
+/* VE cell provenance (js/ve-provenance.js): measured vs interpolated.
+ * Diagonal hatch marks interpolated cells; never uses the fuel blue/red. */
+.ve-prov-interp {
+  background-image: repeating-linear-gradient(
+    45deg, rgba(255,255,255,0.16) 0 3px, transparent 3px 7px);
+}
+.ve-prov-legend .ve-prov-swatch { display:inline-block; width:0.9em;
+  height:0.9em; border:1px solid #8a93a5; vertical-align:-0.12em;
+  margin-right:0.35em; }
+.ve-prov-legend .ve-prov-measured { background:#cfd6e4; }
+.ve-prov-legend .ve-prov-interp {
+  background:#3a4354; background-image: repeating-linear-gradient(
+    45deg, rgba(255,255,255,0.25) 0 2px, transparent 2px 5px); }

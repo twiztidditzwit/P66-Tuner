@@ -269,6 +269,20 @@
           h = (vmax > vmin) ? (v - vmin) / (vmax - vmin) : 0.5;
           rgb = cssToRgb(veValueColor(v, vmin, vmax));
         }
+        // Cell provenance (optional, attached by the caller as
+        // data.provenance): desaturate interpolated cells so unmeasured
+        // regions read as less trustworthy. Never touches fuel blue/red.
+        try {
+          var provCell = data.provenance && data.provenance.cells[r] &&
+            data.provenance.cells[r][c];
+          if (provCell && provCell.kind === 'interpolated' &&
+              typeof P66.veProvenanceColor === 'function') {
+            var ps = P66.veProvenanceColor(provCell,
+              'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')');
+            var pm = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(ps || '');
+            if (pm) rgb = [+pm[1], +pm[2], +pm[3]];
+          }
+        } catch (perr) { /* provenance is decorative */ }
         row.push({ h: h, rgb: rgb });
       }
       nodes.push(row);
